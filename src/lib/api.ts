@@ -216,11 +216,11 @@ export async function partnerSignup(token: string, input: PartnerSignupInput): P
   return { userId: Number.isFinite(userId) ? userId : null };
 }
 
-function otpTarget(email?: string, userId?: number) {
-  const target: { email?: string; user_id?: number } = {};
-  if (userId !== undefined) target.user_id = userId;
-  if (email) target.email = email;
-  return target;
+/** The backend accepts exactly one of user_id or email: prefer user_id, fall back to email. */
+function otpTarget(email?: string, userId?: number): { user_id: number } | { email: string } | Record<string, never> {
+  if (userId !== undefined && Number.isFinite(userId)) return { user_id: userId };
+  if (email) return { email };
+  return {};
 }
 
 /**
