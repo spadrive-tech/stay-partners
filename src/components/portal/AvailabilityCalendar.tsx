@@ -17,25 +17,28 @@ const HORIZON_DAYS = 365;
 
 type EntryStatus = AvailabilityEntry["availability_status"];
 
-/** Expand the backend's date ranges (inclusive) into a per-day map. */
-function expand(entries: AvailabilityEntry[]): Record<string, EntryStatus> {
+/**
+ * The backend stores ranges as inclusive start, EXCLUSIVE end:
+ * a block on the night of 21 Nov is { start_date: "2026-11-21", end_date: "2026-11-22" }.
+ */
+export function expand(entries: AvailabilityEntry[]): Record<string, EntryStatus> {
   const out: Record<string, EntryStatus> = {};
   for (const e of entries) {
     if (e.room_type_id) continue; // whole-listing calendar only
-    const a = parseISO(e.start_date), b = parseISO(e.end_date);
-    if (isBefore(b, a)) continue;
-    for (const d of eachDayOfInterval({ start: a, end: b })) out[key(d)] = e.availability_status;
+    const a = parseISO(e.start_date), lastNight = addDays(parseISO(e.end_date), -1);
+    if (isBefore(lastNight, a)) continue;
+    for (const d of eachDayOfInterval({ start: a, end: lastNight })) out[key(d)] = e.availability_status;
   }
   return out;
 }
 
-/** Collapse consecutive days with the same status into ranges. */
-function compress(days: { date: string; status: EntryStatus }[]): AvailabilityEntry[] {
+/** Collapse consecutive days with the same status into [start, end) ranges. */
+export function compress(days: { date: string; status: EntryStatus }[]): AvailabilityEntry[] {
   const out: AvailabilityEntry[] = [];
   for (const d of days) {
     const last = out[out.length - 1];
-    if (last && last.availability_status === d.status && key(addDays(parseISO(last.end_date), 1)) === d.date) last.end_date = d.date;
-    else out.push({ start_date: d.date, end_date: d.date, availability_status: d.status, source: d.status === "externally_booked" ? "external_booking" : "partner" });
+    if (last && last.availability_status === d.status && last.end_date === d.date) last.end_date = key(addDays(parseISO(d.date), 1));
+    else out.push({ start_date: d.date, end_date: key(addDays(parseISO(d.date), 1)), availability_status: d.status, source: d.status === "externally_booked" ? "external_booking" : "partner" });
   }
   return out;
 }
@@ -94,7 +97,10 @@ export function AvailabilityCalendar({ listingId }: { listingId: string }) {
       const status: EntryStatus = edited ? (edited === "available" ? "available" : "blocked") : server[k] ?? "available";
       return { date: k, status };
     });
-    const past = entries.filter((e) => !e.room_type_id && e.end_date < todayKey).map(({ id: _id, ...e }) => e);
+    // Keep history before today (clipped so it never overlaps the ranges we send).
+    const past = entries
+      .filter((e) => !e.room_type_id && e.start_date < todayKey)
+      .map(({ id: _id, ...e }) => ({ ...e, end_date: e.end_date < todayKey ? e.end_date : todayKey }));
     const roomLevel = entries.filter((e) => e.room_type_id);
     setSaving(true);
     try {

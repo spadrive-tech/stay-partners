@@ -344,7 +344,8 @@ export function savePolicies(id: string, pay: PaymentTerms, cancel: Cancellation
       free_cancellation_days: cancel.allowed ? cancel.free_until_days ?? 0 : null,
       refund_percentage: cancel.allowed ? cancel.refund_percent ?? 100 : null,
       check_in_method: ci.method,
-      arrival_contact_phone: ci.contact_phone?.trim() || null,
+      // Backend accepts 7–15 digits with an optional leading +, so drop spaces, dashes and brackets.
+      arrival_contact_phone: ci.contact_phone?.replace(/[\s\-().]/g, "") || null,
       check_in_time: ci.check_in_time || null,
       check_out_time: ci.check_out_time || null,
       arrival_instructions: ci.instructions?.trim() || null,
@@ -434,7 +435,6 @@ export const getStayWallet = () => api<StayWallet>("/stay/partners/wallet");
 type Loose = Record<string, unknown>;
 const pick = (o: Loose, ...keys: string[]) => { for (const k of keys) if (o[k] !== undefined && o[k] !== null) return o[k]; return undefined; };
 const dateOnly = (v: unknown) => (typeof v === "string" ? v.slice(0, 10) : "");
-const INACTIVE_BOOKING = /cancel|refund|reject|expire|fail|declin|no_show/i;
 
 export async function getStaySummary(): Promise<Summary> {
   const [listingsRes, wallet, bookings, txns] = await Promise.all([
@@ -447,10 +447,14 @@ export async function getStaySummary(): Promise<Summary> {
   const today = new Date().toISOString().slice(0, 10);
   const monthStart = today.slice(0, 8) + "01";
 
-  const active = bookings.filter((b) => !INACTIVE_BOOKING.test(String(pick(b, "status", "booking_status") ?? "")));
-  const checkIn = (b: Loose) => dateOnly(pick(b, "check_in_date", "check_in", "start_date", "checkin_date"));
-  const checkOut = (b: Loose) => dateOnly(pick(b, "check_out_date", "check_out", "end_date", "checkout_date"));
-  const unitsOf = (b: Loose) => Number(pick(b, "room_count", "rooms", "units", "quantity") ?? 1) || 1;
+  // Bookings that hold a room: confirmed or checked in (see stay_bookings.py).
+  const active = bookings.filter((b) => {
+    const s = String(pick(b, "booking_status", "status") ?? "");
+    return s ? s === "confirmed" || s === "checked_in" : true;
+  });
+  const checkIn = (b: Loose) => dateOnly(pick(b, "check_in", "check_in_date"));
+  const checkOut = (b: Loose) => dateOnly(pick(b, "check_out", "check_out_date"));
+  const unitsOf = (b: Loose) => Number(pick(b, "rooms", "room_count") ?? 1) || 1;
 
   const liveUnits = listings
     .filter((l) => l.status === "published")
@@ -459,13 +463,12 @@ export async function getStaySummary(): Promise<Summary> {
     .filter((b) => checkIn(b) && checkIn(b) <= today && (!checkOut(b) || checkOut(b) > today))
     .reduce((n, b) => n + unitsOf(b), 0);
 
+  // Each paid booking posts one "booking_earning_pending" credit (the partner's share after
+  // commission). Later ledger moves (pending → available, payouts) would double count.
   const earningsThisMonth = txns
-    .filter((t) => dateOnly(pick(t, "created_at", "date", "transaction_date")) >= monthStart)
-    .filter((t) => {
-      const kind = String(pick(t, "direction", "entry_type", "type", "transaction_type") ?? "").toLowerCase();
-      return kind ? /credit|earning|income|booking/.test(kind) && !/debit|payout|refund|reversal/.test(kind) : toNum(pick(t, "amount") as Num) > 0;
-    })
-    .reduce((n, t) => n + Math.abs(toNum(pick(t, "net_amount", "amount") as Num)), 0);
+    .filter((t) => dateOnly(pick(t, "created_at")) >= monthStart)
+    .filter((t) => t["category"] === "booking_earning_pending" && t["direction"] === "credit")
+    .reduce((n, t) => n + toNum(t["amount"] as Num), 0);
 
   return {
     total_listings: typeof listingsRes?.total === "number" ? listingsRes.total : listings.length,
@@ -481,3 +484,140 @@ export async function getStaySummary(): Promise<Summary> {
 }
 
 export const summaryQuery = { queryKey: ["summary"], queryFn: getStaySummary };
+
+// ---------- Bookings (serialize_booking in app/services/stay_bookings.py) ----------
+
+export type StayBookingStatus = "pending_payment" | "confirmed" | "checked_in" | "completed" | "cancelled" | "expired" | "refunded";
+export type StayPaymentStatus = "unpaid" | "partially_paid" | "paid" | "failed" | "refunded" | "partially_refunded" | "pay_on_arrival";
+
+export interface StayBooking {
+  id: number;
+  booking_reference: string;
+  tenant_user_id: number;
+  partner_user_id: number;
+  property_id: number;
+  room_type_id: number;
+  /** Inclusive check-in date, exclusive check-out date (YYYY-MM-DD). */
+  check_in: string;
+  check_out: string;
+  guests: number;
+  rooms: number;
+  nights: number;
+  nightly_rate: Num;
+  accommodation_amount: Num;
+  fees_amount: Num;
+  total_amount: Num;
+  amount_due_now: Num;
+  amount_outstanding: Num;
+  payment_option: "full_payment" | "deposit" | "pay_on_arrival";
+  booking_status: StayBookingStatus;
+  payment_status: StayPaymentStatus;
+  expires_at: string | null;
+  created_at: string;
+  updated_at: string;
+}
+
+export const listStayBookings = () => fetchAll<StayBooking>("/stay/partners/bookings");
+export const bookingsQuery = { queryKey: ["bookings"], queryFn: listStayBookings };
+export const completeStayBooking = (id: number) => api<StayBooking>(`/stay/partners/bookings/${id}/complete`, { method: "POST" });
+
+/** The backend allows "complete" for confirmed / checked-in bookings once the check-out date is reached. */
+export const canComplete = (b: StayBooking, today = new Date().toISOString().slice(0, 10)) =>
+  (b.booking_status === "confirmed" || b.booking_status === "checked_in") && b.check_out <= today;
+
+export const amount = (v: Num) => toNum(v);
+
+// ---------- Ledger (GET /stay/partners/wallet/transactions) ----------
+
+export type LedgerCategory =
+  | "booking_earning_pending" | "booking_earning_available" | "commission_deduction" | "refund_reversal" | "refund_liability"
+  | "payout_reservation" | "payout_release" | "payout_debit" | "commission_receivable" | "commission_collection";
+
+export interface StayLedgerEntry {
+  id: number;
+  reference: string;
+  category: LedgerCategory;
+  direction: "credit" | "debit";
+  amount: Num;
+  booking_id: number | null;
+  payout_id: number | null;
+  description: string | null;
+  created_at: string;
+}
+
+export const listStayLedger = () => fetchAll<StayLedgerEntry>("/stay/partners/wallet/transactions", 5);
+
+export const LEDGER_LABEL: Record<LedgerCategory, string> = {
+  booking_earning_pending: "Booking earning (pending)",
+  booking_earning_available: "Earning released",
+  commission_deduction: "Kiataka commission",
+  refund_reversal: "Refund",
+  refund_liability: "Refund owed to Kiataka",
+  payout_reservation: "Payout requested",
+  payout_release: "Payout returned",
+  payout_debit: "Paid out",
+  commission_receivable: "Commission due (pay on arrival)",
+  commission_collection: "Commission collected",
+};
+
+// ---------- Payouts (serialize_payout in app/services/stay_payouts.py) ----------
+
+export type StayPayoutStatus = "pending" | "approved" | "processing" | "paid" | "failed" | "rejected" | "cancelled";
+
+export interface StayPayout {
+  id: number;
+  payout_reference: string;
+  amount: Num;
+  currency: string;
+  status: StayPayoutStatus;
+  bank_name: string;
+  account_number_masked: string;
+  account_name: string;
+  transfer_reference: string | null;
+  failure_reason: string | null;
+  rejection_reason: string | null;
+  requested_at: string;
+  approved_at: string | null;
+  paid_at: string | null;
+  updated_at: string;
+}
+
+export const listStayPayouts = () => fetchAll<StayPayout>("/stay/partners/payouts", 5);
+export const requestStayPayout = (amountNgn: number, bankAccountId: number) =>
+  api<StayPayout>("/stay/partners/payouts/request", { body: { amount: amountNgn, bank_account_id: bankAccountId } });
+export const cancelStayPayout = (id: number) => api<StayPayout>(`/stay/partners/payouts/${id}/cancel`, { method: "POST" });
+
+/** Default minimum from StayCommissionConfig; the backend's error message wins if it differs. */
+export const MIN_PAYOUT = 1000;
+
+// ---------- KYC (POST /stay/partners/kyc) ----------
+
+export interface StayKycInput {
+  legal_first_name: string;
+  legal_last_name: string;
+  /** YYYY-MM-DD */
+  date_of_birth: string;
+  residential_address: string;
+  business_address?: string | null;
+  business_phone?: string | null;
+  /** 11 digits */
+  nin: string;
+  /** 11 digits */
+  bvn: string;
+}
+
+export const submitStayKyc = (v: StayKycInput) =>
+  api<{ status: string; kyc_status: string; nin_last4: string | null; bvn_last4: string | null }>("/stay/partners/kyc", {
+    body: {
+      legal_first_name: v.legal_first_name.trim(),
+      legal_last_name: v.legal_last_name.trim(),
+      date_of_birth: v.date_of_birth,
+      residential_address: v.residential_address.trim(),
+      business_address: v.business_address?.trim() || null,
+      business_phone: v.business_phone?.replace(/[\s\-().]/g, "") || null,
+      nin: v.nin.trim(),
+      bvn: v.bvn.trim(),
+    },
+  });
+
+export const walletQuery = { queryKey: ["wallet"], queryFn: getStayWallet };

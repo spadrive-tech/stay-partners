@@ -1,5 +1,5 @@
 import { createFileRoute } from "@tanstack/react-router";
-import { useQuery } from "@tanstack/react-query";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { useState } from "react";
 import { toast } from "sonner";
 import { Loader2 } from "lucide-react";
@@ -8,8 +8,8 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { ErrorState, LoadingState, PageHeader } from "@/components/portal/shared";
 import { PayoutAccountForm } from "@/components/portal/PayoutAccountForm";
-import { api, session, type Partner } from "@/lib/api";
-import { meQuery } from "@/lib/queries";
+import { changePassword, SUPPORT_EMAIL, updateUserProfile, type UserProfile } from "@/lib/api";
+import { profileQuery } from "@/lib/queries";
 
 export const Route = createFileRoute("/_portal/profile")({
   head: () => ({
@@ -17,9 +17,9 @@ export const Route = createFileRoute("/_portal/profile")({
       { property: "og:type", content: "website" },
       { name: "twitter:card", content: "summary_large_image" },
       { title: "Profile & settings — Kiataka Stays Partners" },
-      { name: "description", content: "Update your business details, bank account and password." },
+      { name: "description", content: "Update your details, bank account and password." },
       { property: "og:title", content: "Profile & settings — Kiataka Stays Partners" },
-      { property: "og:description", content: "Update your business details, bank account and password." },
+      { property: "og:description", content: "Update your details, bank account and password." },
     ],
   }),
   component: ProfilePage,
@@ -27,8 +27,8 @@ export const Route = createFileRoute("/_portal/profile")({
 
 function Section({ title, description, children }: { title: string; description?: string; children: React.ReactNode }) {
   return (
-    <section className="rounded-2xl border bg-card p-6 shadow-card sm:p-8">
-      <h2 className="font-semibold">{title}</h2>
+    <section className="rounded-2xl border border-input bg-card p-6 sm:p-8">
+      <h2 className="text-lg font-bold">{title}</h2>
       {description && <p className="mt-1 text-sm text-muted-foreground">{description}</p>}
       <div className="mt-6">{children}</div>
     </section>
@@ -36,51 +36,44 @@ function Section({ title, description, children }: { title: string; description?
 }
 
 function ProfilePage() {
-  const me = useQuery(meQuery);
+  const me = useQuery(profileQuery);
   if (me.isLoading) return <LoadingState />;
-  if (me.error) return <ErrorState error={me.error} onRetry={() => me.refetch()} />;
+  if (me.error || !me.data) return <ErrorState error={me.error} onRetry={() => me.refetch()} />;
   return (
-    <div className="max-w-3xl space-y-6">
-      <PageHeader title="Profile & settings" />
-      <Section title="Business details">
-        <BusinessForm initial={me.data ?? {}} onSaved={(p) => { me.refetch(); if (p) session.setPartner(p); }} />
+    <>
+      <PageHeader title="Profile & settings" description="Your details, payout bank account and password." />
+      <div className="max-w-3xl space-y-6">
+      <Section title="Your details">
+        <DetailsForm key={me.data.id} profile={me.data} />
       </Section>
       <Section title="Payout bank account">
-        <PayoutAccountForm initial={me.data?.payout_account} onSaved={() => me.refetch()} note="Changing your bank details sends them for re-verification. Payouts are paused until Kiataka confirms the new account." />
+        <PayoutAccountForm note="Changing your bank account verifies the new one with your bank before it's used for payouts." />
       </Section>
       <Section title="Change password">
         <PasswordForm />
       </Section>
-    </div>
+      </div>
+    </>
   );
 }
 
-function BusinessForm({ initial, onSaved }: { initial: Partner; onSaved: (p?: Partner) => void }) {
-  const [v, setV] = useState({
-    business_name: initial.business_name ?? "",
-    contact_person: initial.contact_person ?? "",
-    phone: initial.phone ?? "",
-    email: initial.email ?? "",
-    cac_number: initial.cac_number ?? "",
-  });
+function DetailsForm({ profile }: { profile: UserProfile }) {
+  const qc = useQueryClient();
+  const [v, setV] = useState({ first_name: profile.first_name ?? "", last_name: profile.last_name ?? "", phone: profile.phone ?? "" });
   const [saving, setSaving] = useState(false);
-  const fields: [keyof typeof v, string, string?][] = [
-    ["business_name", "Business name"],
-    ["contact_person", "Contact person"],
-    ["phone", "Phone", "tel"],
-    ["email", "Email", "email"],
-    ["cac_number", "CAC number"],
-  ];
+  const changed = v.first_name !== (profile.first_name ?? "") || v.last_name !== (profile.last_name ?? "") || v.phone !== (profile.phone ?? "");
+
   return (
     <form
       className="grid gap-4 sm:grid-cols-2"
       onSubmit={async (e) => {
         e.preventDefault();
+        if (!v.first_name.trim() || !v.last_name.trim()) { toast.error("Enter your first and last name."); return; }
         setSaving(true);
         try {
-          const p = await api<Partner>("/stays/partner/me", { method: "PUT", body: v });
-          toast.success("Profile updated");
-          onSaved(p && typeof p === "object" ? p : undefined);
+          await updateUserProfile(v);
+          toast.success("Details updated");
+          qc.invalidateQueries({ queryKey: ["profile"] });
         } catch (err) {
           toast.error(err instanceof Error ? err.message : "Couldn't save");
         } finally {
@@ -88,14 +81,31 @@ function BusinessForm({ initial, onSaved }: { initial: Partner; onSaved: (p?: Pa
         }
       }}
     >
-      {fields.map(([k, label, type]) => (
-        <div key={k} className="space-y-2">
-          <Label>{label}</Label>
-          <Input type={type ?? "text"} value={v[k]} onChange={(e) => setV({ ...v, [k]: e.target.value })} />
-        </div>
-      ))}
+      <div className="space-y-2 sm:col-span-2">
+        <Label htmlFor="biz">Business name</Label>
+        <Input id="biz" value={profile.business_name ?? ""} readOnly aria-readonly className="bg-muted text-muted-foreground" />
+        <p className="text-xs text-muted-foreground">
+          To change your business name, email <a href={`mailto:${SUPPORT_EMAIL}`} className="font-medium text-primary underline">{SUPPORT_EMAIL}</a>.
+        </p>
+      </div>
+      <div className="space-y-2">
+        <Label htmlFor="first">First name</Label>
+        <Input id="first" required autoComplete="given-name" value={v.first_name} onChange={(e) => setV({ ...v, first_name: e.target.value })} />
+      </div>
+      <div className="space-y-2">
+        <Label htmlFor="last">Last name</Label>
+        <Input id="last" required autoComplete="family-name" value={v.last_name} onChange={(e) => setV({ ...v, last_name: e.target.value })} />
+      </div>
+      <div className="space-y-2">
+        <Label htmlFor="phone">Phone</Label>
+        <Input id="phone" type="tel" autoComplete="tel" value={v.phone} onChange={(e) => setV({ ...v, phone: e.target.value })} />
+      </div>
+      <div className="space-y-2">
+        <Label htmlFor="email">Email</Label>
+        <Input id="email" type="email" value={profile.email} readOnly aria-readonly className="bg-muted text-muted-foreground" />
+      </div>
       <div className="sm:col-span-2">
-        <Button type="submit" disabled={saving}>{saving && <Loader2 className="h-4 w-4 animate-spin" />} Save details</Button>
+        <Button type="submit" disabled={saving || !changed}>{saving && <Loader2 className="h-4 w-4 animate-spin" />} Save details</Button>
       </div>
     </form>
   );
@@ -113,9 +123,10 @@ function PasswordForm() {
         e.preventDefault();
         if (pw.length < 8) { toast.error("New password must be at least 8 characters."); return; }
         if (pw !== pw2) { toast.error("Passwords don't match."); return; }
+        if (pw === cur) { toast.error("Choose a password different from your current one."); return; }
         setSaving(true);
         try {
-          await api("/stays/partner/me", { method: "PUT", body: { current_password: cur, password: pw, password_confirmation: pw2 } });
+          await changePassword(cur, pw);
           toast.success("Password changed");
           setCur(""); setPw(""); setPw2("");
         } catch (err) {
@@ -125,9 +136,9 @@ function PasswordForm() {
         }
       }}
     >
-      <div className="space-y-2"><Label>Current password</Label><Input type="password" required value={cur} onChange={(e) => setCur(e.target.value)} /></div>
-      <div className="space-y-2"><Label>New password</Label><Input type="password" required value={pw} onChange={(e) => setPw(e.target.value)} /></div>
-      <div className="space-y-2"><Label>Confirm</Label><Input type="password" required value={pw2} onChange={(e) => setPw2(e.target.value)} /></div>
+      <div className="space-y-2"><Label htmlFor="cur-pw">Current password</Label><Input id="cur-pw" type="password" required autoComplete="current-password" value={cur} onChange={(e) => setCur(e.target.value)} /></div>
+      <div className="space-y-2"><Label htmlFor="new-pw">New password</Label><Input id="new-pw" type="password" required autoComplete="new-password" value={pw} onChange={(e) => setPw(e.target.value)} /></div>
+      <div className="space-y-2"><Label htmlFor="new-pw2">Confirm</Label><Input id="new-pw2" type="password" required autoComplete="new-password" value={pw2} onChange={(e) => setPw2(e.target.value)} /></div>
       <div className="sm:col-span-3"><Button type="submit" disabled={saving}>{saving && <Loader2 className="h-4 w-4 animate-spin" />} Update password</Button></div>
     </form>
   );

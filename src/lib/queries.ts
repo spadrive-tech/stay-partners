@@ -1,6 +1,7 @@
-import { api, getBanks, getStayBankAccount, type Partner, type StayOnboarding } from "./api";
+import { api, getBanks, getStayBankAccount, getUserProfile, type StayOnboarding } from "./api";
 
-export const meQuery = { queryKey: ["me"], queryFn: () => api<Partner>("/stays/partner/me") };
+/** The signed-in partner's account (GET /user/get-profile-info). */
+export const profileQuery = { queryKey: ["profile"], queryFn: getUserProfile };
 
 export const onboardingQuery = {
   queryKey: ["onboarding"],

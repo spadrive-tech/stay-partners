@@ -35,7 +35,7 @@ function AvailabilityPage() {
       {!id ? (
         <EmptyState title="No listings yet" description="Create a listing first, then manage its availability here." />
       ) : (
-        <div className="rounded-2xl border bg-card p-6 shadow-card sm:p-8">
+        <div className="rounded-2xl border border-input bg-card p-6 sm:p-8">
           <div className="mb-6 max-w-sm">
             <Select value={id} onValueChange={setPicked}>
               <SelectTrigger><SelectValue /></SelectTrigger>

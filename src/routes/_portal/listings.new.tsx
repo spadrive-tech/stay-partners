@@ -25,7 +25,7 @@ function NewListing() {
   return (
     <div className="max-w-3xl">
       <PageHeader title="New listing" description="Hotels and shortlet apartments." />
-      <div className="rounded-2xl border bg-card p-6 shadow-card sm:p-8">
+      <div className="rounded-2xl border border-input bg-card p-6 sm:p-8">
         <ListingForm
           submitLabel="Create draft"
           onSubmit={async (v) => {

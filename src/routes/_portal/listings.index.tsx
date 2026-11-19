@@ -41,7 +41,7 @@ function ListingsPage() {
           {q.data.map((l) => {
             const cover = l.cover_url ?? l.media?.find((m) => m.is_cover)?.url ?? l.media?.find((m) => m.type === "photo")?.url;
             return (
-              <Link key={l.id} to="/listings/$id" params={{ id: String(l.id) }} className="group overflow-hidden rounded-xl border bg-card shadow-card transition hover:-translate-y-0.5">
+              <Link key={l.id} to="/listings/$id" params={{ id: String(l.id) }} className="group overflow-hidden rounded-2xl border border-input bg-card transition hover:-translate-y-0.5">
                 <div className="aspect-[4/3] bg-muted">
                   {cover ? (
                     <img src={cover} alt={l.title || "Listing photo"} className="h-full w-full object-cover" loading="lazy" />

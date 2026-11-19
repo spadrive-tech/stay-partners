@@ -121,17 +121,102 @@ describe("Stay dashboard summary", () => {
     session.set(tok);
     const d = (offset: number) => { const x = new Date(); x.setDate(x.getDate() + offset); return x.toISOString().slice(0, 10); };
     const listings = { items: [{ ...LIST.items[0], status: "published", total_room_inventory: 5 }, { ...LIST.items[0], id: 2, status: "draft", total_room_inventory: 3 }], total: 2, page: 1, size: 100 };
-    const bookings = { items: [
-      { id: 1, status: "confirmed", check_in_date: d(-1), check_out_date: d(2), room_count: 2 },
-      { id: 2, status: "confirmed", check_in_date: d(3), check_out_date: d(5) },
-      { id: 3, status: "cancelled", check_in_date: d(0), check_out_date: d(1) },
-    ], total: 3, page: 1, size: 100 };
+    // Exact serialize_booking / ledger shapes from the backend.
+    const bk = (id: number, booking_status: string, ci: string, co: string, rooms = 1) => ({ id, booking_reference: `STB-${id}`, tenant_user_id: 9, partner_user_id: 277, property_id: 1, room_type_id: 1, check_in: ci, check_out: co, guests: 2, rooms, nights: 2, nightly_rate: "40000.00", accommodation_amount: "80000.00", fees_amount: "0.00", total_amount: "80000.00", amount_due_now: "0.00", amount_outstanding: "0.00", payment_option: "full_payment", booking_status, payment_status: "paid", expires_at: null, created_at: "", updated_at: "" });
+    const bookings = { items: [bk(1, "confirmed", d(-1), d(2), 2), bk(2, "confirmed", d(3), d(5)), bk(3, "cancelled", d(0), d(1)), bk(4, "pending_payment", d(4), d(6))], total: 4, page: 1, size: 100 };
+    const le = (id: number, category: string, direction: string, amount: string) => ({ id, reference: `L${id}`, category, direction, amount, booking_id: 1, payout_id: null, description: "", created_at: `${d(0)}T10:00:00` });
     const txns = { items: [
-      { id: 1, direction: "credit", amount: "50000.00", created_at: `${d(0)}T10:00:00` },
-      { id: 2, direction: "debit", amount: "20000.00", created_at: `${d(0)}T11:00:00` },
-    ], total: 2, page: 1, size: 100 };
+      le(1, "booking_earning_pending", "credit", "50000.00"),
+      le(2, "booking_earning_available", "credit", "50000.00"),
+      le(3, "booking_earning_pending", "debit", "50000.00"),
+      le(4, "payout_reservation", "debit", "20000.00"),
+    ], total: 4, page: 1, size: 100 };
     mockFetch((c) => (c.url.startsWith("/stay/partners/wallet/transactions") ? txns : c.url === "/stay/partners/wallet" ? { ...WALLET, available_earnings: "75000.00", pending_earnings: 10000 } : c.url.startsWith("/stay/partners/bookings") ? bookings : listings));
     const { getStaySummary } = await import("@/lib/stay");
     expect(await getStaySummary()).toMatchObject({ total_listings: 2, units_vacant_today: 3, upcoming_checkins: 1, earnings_this_month: 50000, pending_payout_balance: 75000, pending_earnings: 10000 });
+  });
+});
+
+describe("Availability ranges (inclusive start, exclusive end)", () => {
+  it("round-trips nights through the backend's [start, end) ranges", async () => {
+    const { expand, compress } = await import("@/components/portal/AvailabilityCalendar");
+    const days = [
+      { date: "2026-11-20", status: "available" as const },
+      { date: "2026-11-21", status: "blocked" as const },
+      { date: "2026-11-22", status: "available" as const },
+      { date: "2026-11-23", status: "available" as const },
+    ];
+    const ranges = compress(days);
+    expect(ranges).toEqual([
+      { start_date: "2026-11-20", end_date: "2026-11-21", availability_status: "available", source: "partner" },
+      { start_date: "2026-11-21", end_date: "2026-11-22", availability_status: "blocked", source: "partner" },
+      { start_date: "2026-11-22", end_date: "2026-11-24", availability_status: "available", source: "partner" },
+    ]);
+    // every range satisfies the backend rule end_date > start_date
+    expect(ranges.every((r) => r.end_date > r.start_date)).toBe(true);
+    expect(expand(ranges)).toEqual({ "2026-11-20": "available", "2026-11-21": "blocked", "2026-11-22": "available", "2026-11-23": "available" });
+  });
+});
+
+describe("Stay bookings, payouts and KYC", () => {
+  afterEach(() => { vi.unstubAllGlobals(); session.clear(); });
+
+  it("completes only confirmed / checked-in stays on or after check-out", async () => {
+    const { canComplete } = await import("@/lib/stay");
+    const b = { booking_status: "confirmed", check_out: "2026-11-19" } as Parameters<typeof canComplete>[0];
+    expect(canComplete(b, "2026-11-19")).toBe(true);
+    expect(canComplete(b, "2026-11-18")).toBe(false);
+    expect(canComplete({ ...b, booking_status: "pending_payment" }, "2026-11-20")).toBe(false);
+    expect(canComplete({ ...b, booking_status: "checked_in" }, "2026-11-20")).toBe(true);
+  });
+
+  it("sends the payout, cancel, complete and KYC requests the backend expects", async () => {
+    session.set(tok);
+    const calls = mockFetch(() => ({}));
+    const { requestStayPayout, cancelStayPayout, completeStayBooking, submitStayKyc } = await import("@/lib/stay");
+    await requestStayPayout(50000, 1);
+    await cancelStayPayout(4);
+    await completeStayBooking(12);
+    await submitStayKyc({ legal_first_name: " Nelson ", legal_last_name: "Ekoh", date_of_birth: "2000-01-01", residential_address: "Uyo", business_address: "", business_phone: "0803 123-4567", nin: "12345678901", bvn: "10987654321" });
+    expect(calls[0]).toEqual({ url: "/stay/partners/payouts/request", method: "POST", body: { amount: 50000, bank_account_id: 1 } });
+    expect(calls[1]).toMatchObject({ url: "/stay/partners/payouts/4/cancel", method: "POST" });
+    expect(calls[2]).toMatchObject({ url: "/stay/partners/bookings/12/complete", method: "POST" });
+    expect(calls[3]).toEqual({ url: "/stay/partners/kyc", method: "POST", body: { legal_first_name: "Nelson", legal_last_name: "Ekoh", date_of_birth: "2000-01-01", residential_address: "Uyo", business_address: null, business_phone: "08031234567", nin: "12345678901", bvn: "10987654321" } });
+  });
+
+  it("strips spaces from the arrival phone so it passes ^\\+?\\d{7,15}$", async () => {
+    session.set(tok);
+    const calls = mockFetch(() => ({}));
+    await savePolicies("7", { full_payment: true, deposit: false, pay_on_arrival: false }, { allowed: false }, { method: "front_desk", contact_phone: "+234 803 123 4567" });
+    expect((calls[0]?.body as Record<string, unknown>)["arrival_contact_phone"]).toBe("+2348031234567");
+  });
+});
+
+describe("Account: profile, password and reset", () => {
+  afterEach(() => { vi.unstubAllGlobals(); session.clear(); });
+
+  it("sends profile updates as multipart and password changes as JSON", async () => {
+    session.set(tok);
+    const calls = mockFetch(() => ({}));
+    const { updateUserProfile, changePassword } = await import("@/lib/api");
+    await updateUserProfile({ first_name: " Anietie ", last_name: "Ekoh", phone: "08145280888" });
+    await changePassword("old-pass1", "new-pass12");
+    expect(calls[0]).toMatchObject({ url: "/user/update-profile-info", method: "PUT" });
+    expect(Object.fromEntries(calls[0]!.form!.entries())).toEqual({ first_name: "Anietie", last_name: "Ekoh", phone: "08145280888" });
+    expect(calls[1]).toEqual({ url: "/user/change-password", method: "POST", body: { current_password: "old-pass1", new_password: "new-pass12" } });
+  });
+
+  it("verifies the reset code (purpose reset_password) before resetting", async () => {
+    const calls = mockFetch((c) => (c.url === "/auth/forgot-password" ? { message: "Password reset OTP sent", id: 277, status: "success" } : { status: "success" }));
+    const { requestPasswordReset, verifyResetCode, resetPassword, resendResetCode } = await import("@/lib/api");
+    expect(await requestPasswordReset(" RedJudge09@gmail.com ")).toEqual({ userId: 277 });
+    await verifyResetCode(277, "123456");
+    await resetPassword(277, "123456", "brand-new-pass");
+    await resendResetCode(277);
+    expect(calls.map((c) => c.url)).toEqual(["/auth/forgot-password", "/auth/verify-otp", "/auth/reset-password", "/auth/resend-otp"]);
+    expect(calls[0]?.body).toEqual({ email: "redjudge09@gmail.com" });
+    expect(calls[1]?.body).toEqual({ user_id: 277, code: "123456", purpose: "reset_password" });
+    expect(calls[2]?.body).toEqual({ user_id: 277, code: "123456", new_password: "brand-new-pass" });
+    expect(calls[3]?.body).toEqual({ user_id: 277, purpose: "reset_password" });
   });
 });

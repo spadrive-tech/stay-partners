@@ -118,7 +118,7 @@ function ListingDetail() {
           <TabsTrigger value="media">Photos</TabsTrigger>
           <TabsTrigger value="availability">Availability</TabsTrigger>
         </TabsList>
-        <div className="mt-6 rounded-2xl border bg-card p-6 shadow-card sm:p-8">
+        <div className="mt-6 rounded-2xl border border-input bg-card p-6 sm:p-8">
           <TabsContent value="details" className="mt-0">
             <ListingForm
               key={l.id}

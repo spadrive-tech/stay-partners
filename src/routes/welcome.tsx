@@ -48,7 +48,7 @@ function Welcome() {
         <Button variant="ghost" size="sm" onClick={finish}>Skip</Button>
       </header>
       <main className="mx-auto flex w-full max-w-5xl flex-1 flex-col items-center gap-8 px-6 pb-10 md:flex-row md:gap-14">
-        <div className="w-full max-w-md overflow-hidden rounded-3xl shadow-card md:flex-1">
+        <div className="w-full max-w-md overflow-hidden rounded-3xl md:flex-1">
           <img key={s.img} src={s.img} alt="" width={1024} height={1024} className="aspect-square w-full animate-in fade-in object-cover duration-500" />
         </div>
         <div className="w-full max-w-md md:flex-1">

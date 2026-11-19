@@ -42,6 +42,7 @@ const db = {
     { id: "b4", reference: "KS-10388", guest_name: "Funke Adeyemi", listing_title: "2-Bedroom Shortlet, Ikoyi", check_in: iso(-10), check_out: iso(-7), amount: 360000, status: "completed" },
     { id: "b5", reference: "KS-10377", guest_name: "Emeka Obi", listing_title: "Deluxe Ocean-View Room", check_in: iso(-14), check_out: iso(-12), amount: 130000, status: "cancelled" },
     { id: "b6", reference: "KS-10430", guest_name: "Grace Johnson", listing_title: "Deluxe Ocean-View Room", check_in: iso(6), check_out: iso(8), amount: 130000, status: "pending" },
+    { id: "b7", reference: "KS-10402", guest_name: "Aisha Bello", listing_title: "Executive Suite, Wuse 2", check_in: iso(-3), check_out: iso(0), amount: 240000, status: "confirmed" },
   ] as Booking[],
   payouts: [
     { id: "p1", amount: 420000, status: "paid", created_at: iso(-20) },
@@ -73,7 +74,6 @@ export async function demoApi(path: string, method: string, body: unknown, form?
   const [p, qs] = path.split("?");
   const q = new URLSearchParams(qs);
   const b = (body ?? {}) as Record<string, any>;
-  const seg = p!.replace("/stays/partner", "").split("/").filter(Boolean);
   const findL = (id: string) => {
     const l = db.listings.find((x) => x.id === id);
     if (!l) throw new DemoError("Listing not found");
@@ -114,15 +114,75 @@ export async function demoApi(path: string, method: string, body: unknown, form?
       },
     };
   }
+  // ---- Stay wallet, ledger, bookings, payouts, KYC (exact backend shapes) ----
+  type DemoPayout = { id: number; payout_reference: string; amount: number; currency: string; status: string; bank_name: string; account_number_masked: string; account_name: string; transfer_reference: null; failure_reason: null; rejection_reason: null; requested_at: string; approved_at: null; paid_at: string | null; updated_at: string };
+  const stayState = db as typeof db & { kyc?: string; stayPayouts?: DemoPayout[] };
+  stayState.kyc ??= "verified";
+  stayState.stayPayouts ??= db.payouts.map((x, i) => ({
+    id: i + 1, payout_reference: `STAYPO-DEMO${i + 1}`, amount: x.amount, currency: "NGN", status: x.status === "requested" ? "pending" : x.status,
+    bank_name: db.partner.payout_account?.bank_name ?? "Guaranty Trust Bank", account_number_masked: `******${(db.partner.payout_account?.account_number ?? "0123456789").slice(-4)}`,
+    account_name: db.partner.payout_account?.account_name ?? "LEKKI COMFORT SUITES LTD", transfer_reference: null, failure_reason: null, rejection_reason: null,
+    requested_at: x.created_at, approved_at: null, paid_at: x.status === "paid" ? x.created_at : null, updated_at: x.created_at,
+  }));
+  const reserved = () => stayState.stayPayouts!.filter((x) => ["pending", "approved", "processing"].includes(x.status)).reduce((n, x) => n + Number(x.amount), 0);
   if (p === "/stay/partners/wallet")
-    return { wallet_id: 1, currency: "NGN", kyc_status: "verified", pending_earnings: 120000, available_earnings: db.balance, reserved_payout: 0, total_paid_out: 1250000, lifetime_earnings: 2123000, refund_liability: 0, payout_eligible: db.balance > 0 };
-  if (p === "/stay/partners/bookings") {
-    const items = db.bookings.filter((x) => !x.request_type || x.request_type === "booking").map((x) => ({ id: x.id, reference: x.reference, status: x.status, check_in_date: x.check_in, check_out_date: x.check_out, guest_name: x.guest_name, listing_title: x.listing_title, total_amount: x.amount, room_count: 1 }));
+    return { wallet_id: 1, currency: "NGN", kyc_status: stayState.kyc, pending_earnings: 120000, available_earnings: db.balance, reserved_payout: reserved(), total_paid_out: 1250000, lifetime_earnings: 2123000, refund_liability: 0, payout_eligible: stayState.kyc === "verified" && db.balance >= 1000 };
+  if (p === "/stay/partners/kyc" && method === "POST") {
+    if (!/^\d{11}$/.test(String(b["nin"])) || !/^\d{11}$/.test(String(b["bvn"]))) throw new DemoError("Must be exactly 11 digits");
+    stayState.kyc = "verified";
+    return { status: "success", kyc_status: "verified", nin_last4: String(b["nin"]).slice(-4), bvn_last4: String(b["bvn"]).slice(-4) };
+  }
+  const toStayBooking = (x: Booking) => {
+    const l = db.listings.find((y) => y.title === x.listing_title);
+    const nights = Math.max(1, Math.round((Date.parse(x.check_out) - Date.parse(x.check_in)) / 86400000));
+    return {
+      id: x.id, booking_reference: x.reference, tenant_user_id: 900, partner_user_id: 277, property_id: l?.id ?? "l1", room_type_id: 1,
+      check_in: x.check_in, check_out: x.check_out, guests: 2, rooms: 1, nights, nightly_rate: Math.round(x.amount / nights), accommodation_amount: x.amount,
+      fees_amount: 0, total_amount: x.amount, amount_due_now: 0, amount_outstanding: 0, payment_option: "full_payment",
+      booking_status: x.status === "pending" ? "pending_payment" : x.status, payment_status: x.status === "pending" ? "unpaid" : x.status === "cancelled" ? "refunded" : "paid",
+      expires_at: null, created_at: x.check_in, updated_at: x.check_in,
+    };
+  };
+  if (p!.startsWith("/stay/partners/bookings")) {
+    const stays = db.bookings.filter((x) => !x.request_type || x.request_type === "booking");
+    const [, , , , id, action] = p!.split("/");
+    if (id && action === "complete") {
+      const x = stays.find((y) => y.id === id);
+      if (!x) throw new DemoError("Booking not found.");
+      if (x.status !== "confirmed" && x.status !== "checked_in") throw new DemoError("Booking is not eligible for completion.");
+      if (x.check_out > new Date().toISOString().slice(0, 10)) throw new DemoError("Cannot complete before check-out date. Admin early checkout required for exceptions.");
+      x.status = "completed";
+      return toStayBooking(x);
+    }
+    if (id) return toStayBooking(stays.find((y) => y.id === id) ?? stays[0]!);
+    const items = stays.map(toStayBooking);
     return { items, total: items.length, page: 1, size: 100 };
   }
   if (p === "/stay/partners/wallet/transactions") {
-    const items = earnings().map((e, i) => ({ id: i + 1, direction: "credit", amount: e.net, created_at: e.date, description: e.listing_title }));
+    const items = earnings().map((e, i) => ({ id: i + 1, reference: `SL-${i + 1}`, category: "booking_earning_pending", direction: "credit", amount: e.net, booking_id: e.booking_id as string | undefined, payout_id: null as number | null, description: `Pending earning for ${e.reference ?? e.listing_title}`, created_at: e.date }));
+    stayState.stayPayouts!.forEach((x) => items.push({ id: 1000 + x.id, reference: `SL-P${x.id}`, category: x.status === "paid" ? "payout_debit" : "payout_reservation", direction: "debit", amount: x.amount, booking_id: "" as string | undefined, payout_id: x.id as number | null, description: `Payout ${x.payout_reference}`, created_at: x.requested_at }));
+    items.sort((a, c) => String(c.created_at).localeCompare(String(a.created_at)));
     return { items, total: items.length, page: 1, size: 100 };
+  }
+  if (p!.startsWith("/stay/partners/payouts")) {
+    const parts = p!.split("/");
+    if (parts[4] === "request" && method === "POST") {
+      const amt = Number(b["amount"]);
+      if (stayState.kyc !== "verified") throw new DemoError("KYC verification is required before requesting payouts.");
+      if (amt < 1000) throw new DemoError("Minimum payout is ₦1000.00.");
+      if (amt > db.balance) throw new DemoError("Insufficient available earnings.");
+      db.balance -= amt;
+      const row: DemoPayout = { ...stayState.stayPayouts![0]!, id: stayState.stayPayouts!.length + 1, payout_reference: `STAYPO-DEMO${Date.now()}`, amount: amt, status: "pending", paid_at: null, requested_at: new Date().toISOString(), updated_at: new Date().toISOString() };
+      stayState.stayPayouts!.unshift(row);
+      return row;
+    }
+    if (parts[4] && parts[5] === "cancel") {
+      const row = stayState.stayPayouts!.find((x) => String(x.id) === parts[4]);
+      if (!row || row.status !== "pending") throw new DemoError("Only pending payout requests can be cancelled.");
+      row.status = "cancelled"; db.balance += Number(row.amount);
+      return row;
+    }
+    return { items: stayState.stayPayouts, total: stayState.stayPayouts!.length, page: 1, size: 100 };
   }
   // ---- Stay partner listings (/stay/partners/listings*) ----
   if (p!.startsWith("/stay/partners/listings")) {
@@ -212,120 +272,22 @@ export async function demoApi(path: string, method: string, body: unknown, form?
       },
     };
   }
-  if (seg[0] === "application") {
-    const { id_number, id_type, ...rest } = b;
-    Object.assign(db.partner, rest, { profile_complete: true });
-    return db.partner;
+  // ---- Shared account endpoints ----
+  if (p === "/user/get-profile-info") {
+    const [first, ...rest] = (db.partner.contact_person ?? "Demo Partner").split(" ");
+    return { id: 1, role: "partner", first_name: first, last_name: rest.join(" ") || "Partner", email: db.partner.email ?? "demo@usekiataka.com", phone: db.partner.phone ?? null, partner_type: "stay_partner", business_name: db.partner.business_name };
   }
-  if (seg[0] === "me") {
-    if (method === "PUT") {
-      const { current_password, new_password, password, ...rest } = b;
-      Object.assign(db.partner, rest);
-    }
-    return db.partner;
+  if (p === "/user/update-profile-info" && form) {
+    const first = String(form.get("first_name") ?? ""), last = String(form.get("last_name") ?? "");
+    if (first || last) db.partner.contact_person = `${first} ${last}`.trim();
+    if (form.get("phone") !== null) db.partner.phone = String(form.get("phone"));
+    return { status: "success" };
   }
-  if (seg[0] === "payout-account") return (db.partner.payout_account = b as any), db.partner;
-  if (seg[0] === "summary")
-    return {
-      total_listings: db.listings.length,
-      units_vacant_today: 7,
-      upcoming_checkins: db.bookings.filter((x) => x.status === "confirmed" || x.status === "pending").length,
-      earnings_this_month: 873000,
-      pending_payout_balance: db.balance,
-    };
-  if (seg[0] === "earnings") return { balance: db.balance, available_balance: db.balance, items: earnings() };
-  if (seg[0] === "payouts") {
-    if (method === "POST") {
-      if (db.balance <= 0) throw new DemoError("No balance available to pay out");
-      const po: Payout = { id: `p${Date.now()}`, amount: Number(b["amount"] ?? db.balance), status: "requested", created_at: iso(0) };
-      db.payouts.unshift(po);
-      db.balance = 0;
-      return po;
-    }
-    return db.payouts;
+  if (p === "/user/change-password") {
+    if (!b["current_password"] || String(b["new_password"] ?? "").length < 8) throw new DemoError("Check your current and new password.");
+    return { status: "success", message: "Password changed" };
   }
-  if (seg[0] === "landlord" && seg[1] === "tenants") {
-    const i = db.bookings.findIndex((x) => x.id === seg[2]);
-    const bk = db.bookings[i];
-    if (!bk) throw new DemoError("Tenant not found");
-    const t = db.applicants[i % db.applicants.length]!;
-    return { ...t, id: seg[2], photo_url: undefined, name: bk.guest_name };
-  }
-  if (seg[0] === "bookings") {
-    if (seg[1] && seg[2]) {
-      const bk = db.bookings.find((x) => x.id === seg[1]);
-      if (bk) bk.status = seg[2] === "accept" ? "confirmed" : "cancelled";
-      return bk;
-    }
-    const st = q.get("status");
-    const search = (q.get("search") ?? q.get("q") ?? "").toLowerCase();
-    return db.bookings.map((x) => ({ ...x, tenant_id: x.id })).filter(
-      (x) =>
-        (!st || st === "all" || x.status === st) &&
-        (!search || x.guest_name.toLowerCase().includes(search) || x.reference.toLowerCase().includes(search)),
-    );
-  }
-  if (seg[0] === "listings") {
-    if (!seg[1]) {
-      if (method === "POST") {
-        const l: Listing = { ...(b as any), id: `l${Date.now()}`, status: "draft", media: [] };
-        db.listings.unshift(l);
-        return l;
-      }
-      return db.listings.map((l) => ({ ...l, cover_url: l.media?.find((m) => m.is_cover)?.url ?? l.media?.[0]?.url }));
-    }
-    const l = findL(seg[1]);
-    const action = seg[2];
-    if (!action) {
-      if (method === "PUT") Object.assign(l, b);
-      return l;
-    }
-    if (action === "submit") return (l.status = "pending_review"), l;
-    if (action === "pause") return (l.status = "draft"), l;
-    if (action === "request-removal") return { ok: true };
-    if (action === "media") {
-      l.media ??= [];
-      if (seg[3] === "order") {
-        const order: string[] = b["order"] ?? [];
-        l.media.sort((a, c) => order.indexOf(a.id) - order.indexOf(c.id));
-        return l.media;
-      }
-      if (seg[3] && seg[4] === "cover") {
-        l.media.forEach((m) => (m.is_cover = m.id === seg[3]));
-        return l.media;
-      }
-      if (seg[3] && method === "DELETE") {
-        l.media = l.media.filter((m) => m.id !== seg[3]);
-        return l.media;
-      }
-      if (form) {
-        const rt = form.get("room_type");
-        const roomType = typeof rt === "string" && rt ? rt : undefined;
-        for (const f of form.getAll("files[]")) {
-          if (f instanceof File)
-            l.media.push({ id: `m${Date.now()}${Math.random()}`, url: URL.createObjectURL(f), type: f.type.startsWith("video") ? "video" : "photo", is_cover: l.media.length === 0, ...(roomType ? { room_type: roomType } : {}) });
-        }
-      }
-      return l.media;
-    }
-    if (action === "availability") {
-      const map = (db.availability[l.id] ??= {});
-      if (method === "PUT") {
-        for (const d of (b["days"] ?? []) as AvailabilityDay[]) map[d.date] = d.status;
-        return { ok: true };
-      }
-      const from = new Date(q.get("from") ?? iso(0));
-      const to = new Date(q.get("to") ?? iso(30));
-      const days: AvailabilityDay[] = [];
-      for (let d = new Date(from); d <= to; d.setDate(d.getDate() + 1)) {
-        const k = d.toISOString().slice(0, 10);
-        const n = d.getDate();
-        days.push({ date: k, status: map[k] ?? (!["l1", "l2", "l3"].includes(l.id) ? "available" : n % 9 === 0 ? "booked" : n % 13 === 0 ? "blocked" : "available") });
-      }
-      return { days };
-    }
-  }
-  return { ok: true };
+  throw new DemoError(`Demo mode doesn't support ${method} ${p}`);
 }
 
 // ---- Stay listing demo helpers ----

@@ -4,8 +4,14 @@
 
 @custom-variant dark (&:is(.dark *));
 
+/* Satoshi — the Kiataka product typeface (same files as the Property Manager app). */
+@font-face { font-family: "Satoshi"; src: url("./assets/fonts/satoshi/Satoshi-Regular.woff") format("woff"); font-weight: 400; font-style: normal; font-display: swap; }
+@font-face { font-family: "Satoshi"; src: url("./assets/fonts/satoshi/Satoshi-Medium.woff") format("woff"); font-weight: 500; font-style: normal; font-display: swap; }
+@font-face { font-family: "Satoshi"; src: url("./assets/fonts/satoshi/Satoshi-Bold.woff") format("woff"); font-weight: 600 700; font-style: normal; font-display: swap; }
+@font-face { font-family: "Satoshi"; src: url("./assets/fonts/satoshi/Satoshi-Black.woff") format("woff"); font-weight: 800 900; font-style: normal; font-display: swap; }
+
 @theme inline {
-  --font-sans: "DM Sans", ui-sans-serif, system-ui, sans-serif;
+  --font-sans: "Satoshi", ui-sans-serif, system-ui, sans-serif;
   --radius-sm: calc(var(--radius) - 4px);
   --radius-md: calc(var(--radius) - 2px);
   --radius-lg: var(--radius);
@@ -32,6 +38,8 @@
   --color-warning: var(--warning);
   --color-warning-foreground: var(--warning-foreground);
   --color-brand-soft: var(--brand-soft);
+  --color-brand-yellow: var(--brand-yellow);
+  --color-brand-yellow-soft: var(--brand-yellow-soft);
   --color-border: var(--border);
   --color-input: var(--input);
   --color-ring: var(--ring);
@@ -51,53 +59,58 @@
 }
 
 :root {
+  /* Kiataka product palette — matches the Property Manager console. */
   --radius: 0.75rem;
-  --background: oklch(0.985 0.004 300);
-  --foreground: oklch(0.2 0.05 295);
-  --card: oklch(1 0 0);
-  --card-foreground: oklch(0.2 0.05 295);
-  --popover: oklch(1 0 0);
-  --popover-foreground: oklch(0.2 0.05 295);
-  /* #2B076A */
-  --primary: oklch(0.29 0.16 289);
-  --primary-foreground: oklch(0.98 0.01 300);
-  --secondary: oklch(0.955 0.015 300);
-  --secondary-foreground: oklch(0.29 0.16 289);
-  --muted: oklch(0.96 0.008 300);
-  --muted-foreground: oklch(0.5 0.03 295);
-  /* #4B1C6D */
-  --accent: oklch(0.35 0.13 310);
-  --accent-foreground: oklch(0.98 0.01 300);
-  --brand-soft: oklch(0.94 0.03 300);
-  --destructive: oklch(0.577 0.22 27);
-  --destructive-foreground: oklch(0.98 0 0);
-  --success: oklch(0.6 0.13 155);
-  --success-foreground: oklch(0.98 0 0);
-  --warning: oklch(0.78 0.15 75);
-  --warning-foreground: oklch(0.25 0.05 60);
-  --border: oklch(0.92 0.012 300);
-  --input: oklch(0.9 0.015 300);
-  --ring: oklch(0.29 0.16 289);
-  --chart-1: oklch(0.29 0.16 289);
-  --chart-2: oklch(0.35 0.13 310);
-  --chart-3: oklch(0.6 0.13 155);
-  --chart-4: oklch(0.78 0.15 75);
-  --chart-5: oklch(0.6 0.1 250);
-  --sidebar: oklch(0.29 0.16 289);
-  --sidebar-foreground: oklch(0.92 0.03 300);
-  --sidebar-primary: oklch(0.98 0.01 300);
-  --sidebar-primary-foreground: oklch(0.29 0.16 289);
-  --sidebar-accent: oklch(0.35 0.13 300);
-  --sidebar-accent-foreground: oklch(0.99 0 0);
-  --sidebar-border: oklch(0.36 0.12 290);
-  --sidebar-ring: oklch(0.7 0.1 300);
-  --gradient-brand: linear-gradient(140deg, var(--primary), var(--accent));
-  --shadow-card: 0 1px 2px oklch(0.29 0.16 289 / 0.04), 0 8px 24px -12px oklch(0.29 0.16 289 / 0.12);
+  --background: #ffffff;
+  --foreground: #111111;
+  --card: #ffffff;
+  --card-foreground: #111111;
+  --popover: #ffffff;
+  --popover-foreground: #111111;
+  --primary: #270660;            /* PM --color-primary */
+  --primary-foreground: #ffffff;
+  --secondary: #f4f1f9;
+  --secondary-foreground: #270660;
+  --muted: #f7f7f8;
+  --muted-foreground: #68666a;   /* PM --color-gray */
+  --accent: #4b1c6d;             /* brand purple */
+  --accent-foreground: #ffffff;
+  --brand-soft: #efeaf7;
+  --brand-yellow: #ffc208;       /* PM --color-yellow */
+  --brand-yellow-soft: #fff8e1;
+  --destructive: #dc2626;        /* PM --color-failure */
+  --destructive-foreground: #ffffff;
+  --success: #16a34a;            /* PM --color-complete */
+  --success-foreground: #ffffff;
+  --warning: #f59e0b;            /* PM --color-pending */
+  --warning-foreground: #78350f;
+  --border: #e5e7eb;             /* gray-200 dividers */
+  --input: #d1d5db;              /* gray-300 fields and cards */
+  --ring: #270660;
+  --chart-1: #270660;
+  --chart-2: #4b1c6d;
+  --chart-3: #16a34a;
+  --chart-4: #ffc208;
+  --chart-5: #2563eb;
+  --sidebar: #ffffff;
+  --sidebar-foreground: #111111;
+  --sidebar-primary: #270660;
+  --sidebar-primary-foreground: #ffffff;
+  --sidebar-accent: #f3f4f6;
+  --sidebar-accent-foreground: #111111;
+  --sidebar-border: #e5e7eb;
+  --sidebar-ring: #270660;
+  /* PM hero cards (wallet balance, total expected) */
+  --gradient-brand: linear-gradient(125deg, #17003f 0%, #2c0e4e 55%, #4e1f70 100%);
+  --shadow-card: 0 1px 2px rgb(17 17 17 / 0.04);
 }
 
 @layer base {
   * {
     border-color: var(--color-border);
+  }
+  button {
+    cursor: pointer;
   }
   body {
     background-color: var(--color-background);

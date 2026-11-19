@@ -53,10 +53,11 @@ function Onboarding() {
   const name = q.data?.business_name;
 
   return (
-    <div className="mx-auto max-w-2xl">
+    <>
       <PageHeader title={`Welcome${name ? `, ${name}` : ""}`} description="Finish these steps to start taking bookings on Kiataka Stays." />
+      <div className="mx-auto max-w-2xl">
       <Steps current={current} labels={STEP_LABELS} />
-      <div className="rounded-2xl border bg-card p-8 shadow-card">
+      <div className="rounded-2xl border border-input bg-card p-8">
         {phase === "bank_account" && (
           <Status
             icon={<Wallet className="h-8 w-8 text-warning" />}
@@ -88,8 +89,8 @@ function Onboarding() {
       </div>
 
       {phase === "bank_account" && (
-        <div className="mt-6 rounded-2xl border bg-card p-8 shadow-card">
-          <h2 className="font-semibold">Add your payout bank account</h2>
+        <div className="mt-6 rounded-2xl border border-input bg-card p-8">
+          <h2 className="text-lg font-bold">Add your payout bank account</h2>
           <p className="mt-1 text-sm text-muted-foreground">We'll send your earnings here.</p>
           <div className="mt-6">
             <PayoutAccountForm onSaved={() => q.refetch()} />
@@ -106,7 +107,8 @@ function Onboarding() {
           <Link to="/listings">Go to my listings</Link>
         </Button>
       )}
-    </div>
+      </div>
+    </>
   );
 }
 

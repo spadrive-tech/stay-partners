@@ -175,6 +175,59 @@ export async function logout(): Promise<void> {
   session.clear();
 }
 
+// ---------- Account (shared /user and /auth endpoints) ----------
+
+/** GET /user/get-profile-info (real response, 19 Nov 2026). */
+export interface UserProfile {
+  id: number;
+  role: string;
+  first_name: string | null;
+  last_name: string | null;
+  email: string;
+  phone: string | null;
+  profile_picture?: string | null;
+  has_pin?: boolean;
+  partner_id?: number | null;
+  referral_code?: string | null;
+  partner_type?: string | null;
+  business_name?: string | null;
+  onboarding?: StayOnboarding["onboarding"];
+}
+
+export const getUserProfile = () => api<UserProfile>("/user/get-profile-info");
+
+/** PUT /user/update-profile-info takes multipart form data; only send what changed. */
+export function updateUserProfile(v: { first_name?: string; last_name?: string; phone?: string }) {
+  const fd = new FormData();
+  for (const [k, val] of Object.entries(v)) if (val !== undefined) fd.append(k, val.trim());
+  return api<UserProfile>("/user/update-profile-info", { method: "PUT", form: fd });
+}
+
+export const changePassword = (current_password: string, new_password: string) =>
+  api("/user/change-password", { body: { current_password, new_password } });
+
+/** Sends a reset code by email and returns the user id the reset step needs. */
+export async function requestPasswordReset(email: string): Promise<{ userId: number | null }> {
+  const res = await api<{ id?: number; user_id?: number }>("/auth/forgot-password", { body: { email: email.trim().toLowerCase() }, auth: false });
+  const id = res?.id ?? res?.user_id;
+  return { userId: typeof id === "number" ? id : null };
+}
+
+/**
+ * Reset is two steps on the backend:
+ * 1. POST /auth/verify-otp { user_id, code, purpose: "reset_password" } marks the code verified.
+ * 2. POST /auth/reset-password { user_id, code, new_password } then accepts that same code.
+ * (verify-otp and resend-otp take exactly one of user_id or email.)
+ */
+export const verifyResetCode = (user_id: number, code: string) =>
+  api("/auth/verify-otp", { body: { user_id, code, purpose: "reset_password" }, auth: false });
+
+export const resendResetCode = (user_id: number) =>
+  api("/auth/resend-otp", { body: { user_id, purpose: "reset_password" }, auth: false });
+
+export const resetPassword = (user_id: number, code: string, new_password: string) =>
+  api("/auth/reset-password", { body: { user_id, code, new_password }, auth: false });
+
 // ---------- Invite signup (approved Stay partners) ----------
 
 export const STAY_PARTNER_TYPE = "stay_partner";
@@ -316,7 +369,7 @@ export interface PayoutAccount {
   account_number: string;
   account_name: string;
 }
-/** A bank from GET /payment/banks (Embedly). */
+/** A bank from GET /stay/partners/banks. */
 export interface BankOption {
   bankname: string;
   bankcode: string;
@@ -625,35 +678,3 @@ export function scoreBand(score: number) {
   return { label: "Poor", tone: "text-destructive" };
 }
 
-/** Map a /landlord/tenants/{id} response onto Applicant, tolerating common field names. */
-export function toApplicant(raw: unknown): Applicant {
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  const r: any = raw ?? {};
-  const v = r.verification ?? r.verifications ?? {};
-  const h = r.history ?? r.rental_history ?? {};
-  const name = r.name ?? r.full_name ?? [r.first_name, r.last_name].filter(Boolean).join(" ");
-  return {
-    id: String(r.id ?? r.tenant_id ?? ""),
-    name: name || "Guest",
-    photo_url: r.photo_url ?? r.avatar ?? r.profile_photo ?? undefined,
-    occupation: r.occupation ?? r.employer ?? undefined,
-    listing_title: r.listing_title ?? "",
-    check_in: r.check_in ?? "",
-    check_out: r.check_out ?? "",
-    guests: r.guests,
-    message: r.message,
-    rental_score: Number(r.rental_score ?? r.score ?? r.credit_score ?? 0),
-    verification: {
-      id_verified: !!(v.id_verified ?? v.identity ?? r.id_verified ?? r.is_verified),
-      phone_verified: !!(v.phone_verified ?? v.phone ?? r.phone_verified),
-      employment_verified: !!(v.employment_verified ?? v.employment ?? r.employment_verified),
-    },
-    history: {
-      past_stays: Number(h.past_stays ?? h.total_rentals ?? r.past_stays ?? 0),
-      average_rating: h.average_rating ?? r.average_rating ?? r.rating,
-      incidents: Number(h.incidents ?? r.incidents ?? 0),
-      reviews: h.reviews ?? r.reviews ?? [],
-    },
-    status: "pending",
-  };
-}
