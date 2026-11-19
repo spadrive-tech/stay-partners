@@ -2,13 +2,13 @@ import { useMemo, useState } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { toast } from "sonner";
 import { addDays, addMonths, eachDayOfInterval, endOfMonth, endOfWeek, format, isBefore, isSameMonth, parseISO, startOfDay, startOfMonth, startOfWeek } from "date-fns";
-import { ChevronLeft, ChevronRight, Loader2 } from "lucide-react";
+import { ChevronLeft, ChevronRight, Loader2, Lock } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { ErrorState, LoadingState } from "@/components/portal/shared";
 import type { AvailabilityEntry, DayState } from "@/lib/api";
-import { listingQuery, saveAvailability } from "@/lib/stay";
+import { canEditListing, listingQuery, saveAvailability } from "@/lib/stay";
 import { cn } from "@/lib/utils";
 
 const key = (d: Date) => format(d, "yyyy-MM-dd");
@@ -54,8 +54,11 @@ export function AvailabilityCalendar({ listingId }: { listingId: string }) {
   const statusOf = (k: string): DayState => edits[k] ?? (server[k] && server[k] !== "available" ? "blocked" : "available");
   const today = startOfDay(new Date());
   const neverSaved = q.data ? !q.data.progress?.availability_completed && entries.length === 0 : false;
+  // Kiataka only accepts availability changes on draft or rejected listings for now.
+  const locked = q.data ? !canEditListing(q.data.status) : false;
 
   function toggle(d: Date) {
+    if (locked) return;
     const k = key(d);
     const s = statusOf(k);
     if (s === "booked" || isBefore(d, today)) return;
@@ -135,21 +138,37 @@ export function AvailabilityCalendar({ listingId }: { listingId: string }) {
           <Legend className="bg-card border" label="Available" />
           <Legend className="bg-muted-foreground/30" label="Occupied" />
         </div>
-        <Button onClick={save} disabled={(!Object.keys(edits).length && !neverSaved) || saving}>
-          {saving && <Loader2 className="h-4 w-4 animate-spin" />} {neverSaved && !Object.keys(edits).length ? "Save availability" : `Save changes${Object.keys(edits).length ? ` (${Object.keys(edits).length})` : ""}`}
-        </Button>
+        {!locked && (
+          <Button onClick={save} disabled={(!Object.keys(edits).length && !neverSaved) || saving}>
+            {saving && <Loader2 className="h-4 w-4 animate-spin" />} {neverSaved && !Object.keys(edits).length ? "Save availability" : `Save changes${Object.keys(edits).length ? ` (${Object.keys(edits).length})` : ""}`}
+          </Button>
+        )}
       </div>
-      <div className="mt-5 rounded-xl border bg-muted/40 p-4">
-        <div className="mb-3 text-sm font-medium">Mark a date range</div>
-        <div className="flex flex-wrap items-end gap-3">
-          <div className="space-y-1"><Label className="text-xs">From</Label><Input type="date" min={key(today)} value={rFrom} onChange={(e) => setRFrom(e.target.value)} /></div>
-          <div className="space-y-1"><Label className="text-xs">To</Label><Input type="date" min={rFrom || key(today)} value={rTo} onChange={(e) => setRTo(e.target.value)} /></div>
-          <Button type="button" variant="secondary" onClick={() => applyRange("blocked")}>Mark occupied</Button>
-          <Button type="button" variant="outline" onClick={() => applyRange("available")}>Mark available</Button>
+      {locked ? (
+        <div className="mt-5 flex gap-3 rounded-xl border border-warning/50 bg-warning/10 p-4 text-sm">
+          <Lock className="mt-0.5 h-4 w-4 shrink-0 text-[#b45309]" />
+          <p>
+            <span className="font-semibold">Availability can't be changed on {q.data?.status === "live" ? "live" : (q.data?.status ?? "").replace(/_/g, " ")} listings yet.</span>{" "}
+            <span className="text-muted-foreground">You're seeing the dates as saved. To block dates sold elsewhere, email support@usekiataka.com while we add this.</span>
+          </p>
         </div>
-        <p className="mt-2 text-xs text-muted-foreground">Use this for stays already booked outside Kiataka, even months or years ahead. You can also tap single dates below.</p>
-        {neverSaved && <p className="mt-2 text-xs font-medium text-foreground">Everything is open by default. Mark any dates that are taken, then save — Kiataka needs your availability before you can submit.</p>}
-      </div>
+      ) : (
+        <div className="mt-5 rounded-xl border bg-muted/40 p-4">
+          <div className="mb-3 text-sm font-medium">Mark a date range</div>
+          <div className="flex flex-wrap items-end gap-3">
+            <div className="grid w-full grid-cols-1 gap-3 sm:w-auto sm:grid-cols-2">
+              <div className="min-w-0 space-y-1"><Label className="text-xs">From</Label><Input type="date" min={key(today)} value={rFrom} onChange={(e) => setRFrom(e.target.value)} /></div>
+              <div className="min-w-0 space-y-1"><Label className="text-xs">To</Label><Input type="date" min={rFrom || key(today)} value={rTo} onChange={(e) => setRTo(e.target.value)} /></div>
+            </div>
+            <div className="grid w-full grid-cols-1 gap-3 min-[360px]:grid-cols-2 sm:flex sm:w-auto">
+              <Button type="button" variant="secondary" className="min-w-0 px-3" onClick={() => applyRange("blocked")}>Mark occupied</Button>
+              <Button type="button" variant="outline" className="min-w-0 px-3" onClick={() => applyRange("available")}>Mark available</Button>
+            </div>
+          </div>
+          <p className="mt-2 text-xs text-muted-foreground">Use this for stays already booked outside Kiataka, even months or years ahead. You can also tap single dates below.</p>
+          {neverSaved && <p className="mt-2 text-xs font-medium text-foreground">Everything is open by default. Mark any dates that are taken, then save — Kiataka needs your availability before you can submit.</p>}
+        </div>
+      )}
       <div className="mt-6 grid gap-8 lg:grid-cols-2">
         {[month, addMonths(month, 1)].map((m) => (
           <Month key={key(m)} month={m} statusOf={statusOf} edits={edits} today={today} onToggle={toggle} />

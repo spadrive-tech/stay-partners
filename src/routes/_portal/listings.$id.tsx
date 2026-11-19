@@ -3,7 +3,7 @@ import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { useState } from "react";
 import { toast } from "sonner";
 import { z } from "zod";
-import { AlertTriangle, ArrowLeft, ArrowRight, CheckCircle2, Clock, Send } from "lucide-react";
+import { AlertTriangle, ArrowLeft, ArrowRight, CheckCircle2, Clock, Lock, Send } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { ErrorState, LoadingState, PageHeader, StatusBadge } from "@/components/portal/shared";
@@ -13,7 +13,7 @@ import { MediaManager } from "@/components/portal/MediaManager";
 import { AvailabilityCalendar } from "@/components/portal/AvailabilityCalendar";
 import { ShareListing } from "@/components/portal/ShareListing";
 import { listingTypeLabel, SUPPORT_EMAIL } from "@/lib/api";
-import { listingQuery, missingSteps, saveDetails, submitStayListing } from "@/lib/stay";
+import { canEditListing, listingQuery, missingSteps, saveDetails, submitStayListing } from "@/lib/stay";
 
 export const Route = createFileRoute("/_portal/listings/$id")({
   validateSearch: z.object({ tab: z.enum(["details", "pricing", "media", "availability"]).optional() }),
@@ -99,6 +99,11 @@ function ListingDetail() {
       {l.status === "pending_review" && (
         <Banner tone="muted" icon={<Clock className="h-5 w-5 shrink-0 text-warning" />} title="Under review">
           Our team is reviewing this listing. We'll email you once it's approved — usually within 2 business days.
+        </Banner>
+      )}
+      {(l.status === "approved" || l.status === "live") && !canEditListing(l.status) && (
+        <Banner tone="muted" icon={<Lock className="h-5 w-5 shrink-0 text-warning" />} title={l.status === "live" ? "This listing is live" : "This listing is approved"}>
+          Kiataka doesn't support editing approved listings yet, so changes here won't save. Email {SUPPORT_EMAIL} if something needs updating.
         </Banner>
       )}
       {l.status === "suspended" && (

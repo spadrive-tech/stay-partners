@@ -17,7 +17,6 @@ import { Route as ResetPasswordRouteImport } from './routes/reset-password'
 import { Route as SetPasswordRouteImport } from './routes/set-password'
 import { Route as VerifyEmailRouteImport } from './routes/verify-email'
 import { Route as WelcomeRouteImport } from './routes/welcome'
-import { Route as PortalApplicationRouteImport } from './routes/_portal/application'
 import { Route as PortalAvailabilityRouteImport } from './routes/_portal/availability'
 import { Route as PortalBookingsRouteImport } from './routes/_portal/bookings'
 import { Route as PortalDashboardRouteImport } from './routes/_portal/dashboard'
@@ -66,11 +65,6 @@ const WelcomeRoute = WelcomeRouteImport.update({
   id: '/welcome',
   path: '/welcome',
   getParentRoute: () => rootRouteImport,
-} as any)
-const PortalApplicationRoute = PortalApplicationRouteImport.update({
-  id: '/application',
-  path: '/application',
-  getParentRoute: () => PortalRouteRoute,
 } as any)
 const PortalAvailabilityRoute = PortalAvailabilityRouteImport.update({
   id: '/availability',
@@ -126,7 +120,6 @@ export interface FileRoutesByFullPath {
   '/set-password': typeof SetPasswordRoute
   '/verify-email': typeof VerifyEmailRoute
   '/welcome': typeof WelcomeRoute
-  '/application': typeof PortalApplicationRoute
   '/availability': typeof PortalAvailabilityRoute
   '/bookings': typeof PortalBookingsRoute
   '/dashboard': typeof PortalDashboardRoute
@@ -145,7 +138,6 @@ export interface FileRoutesByTo {
   '/set-password': typeof SetPasswordRoute
   '/verify-email': typeof VerifyEmailRoute
   '/welcome': typeof WelcomeRoute
-  '/application': typeof PortalApplicationRoute
   '/availability': typeof PortalAvailabilityRoute
   '/bookings': typeof PortalBookingsRoute
   '/dashboard': typeof PortalDashboardRoute
@@ -166,7 +158,6 @@ export interface FileRoutesById {
   '/set-password': typeof SetPasswordRoute
   '/verify-email': typeof VerifyEmailRoute
   '/welcome': typeof WelcomeRoute
-  '/_portal/application': typeof PortalApplicationRoute
   '/_portal/availability': typeof PortalAvailabilityRoute
   '/_portal/bookings': typeof PortalBookingsRoute
   '/_portal/dashboard': typeof PortalDashboardRoute
@@ -187,7 +178,6 @@ export interface FileRouteTypes {
     | '/set-password'
     | '/verify-email'
     | '/welcome'
-    | '/application'
     | '/availability'
     | '/bookings'
     | '/dashboard'
@@ -206,7 +196,6 @@ export interface FileRouteTypes {
     | '/set-password'
     | '/verify-email'
     | '/welcome'
-    | '/application'
     | '/availability'
     | '/bookings'
     | '/dashboard'
@@ -226,7 +215,6 @@ export interface FileRouteTypes {
     | '/set-password'
     | '/verify-email'
     | '/welcome'
-    | '/_portal/application'
     | '/_portal/availability'
     | '/_portal/bookings'
     | '/_portal/dashboard'
@@ -307,13 +295,6 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof WelcomeRouteImport
       parentRoute: typeof rootRouteImport
     }
-    '/_portal/application': {
-      id: '/_portal/application'
-      path: '/application'
-      fullPath: '/application'
-      preLoaderRoute: typeof PortalApplicationRouteImport
-      parentRoute: typeof PortalRouteRoute
-    }
     '/_portal/availability': {
       id: '/_portal/availability'
       path: '/availability'
@@ -381,7 +362,6 @@ declare module '@tanstack/react-router' {
 }
 
 interface PortalRouteRouteChildren {
-  PortalApplicationRoute: typeof PortalApplicationRoute
   PortalAvailabilityRoute: typeof PortalAvailabilityRoute
   PortalBookingsRoute: typeof PortalBookingsRoute
   PortalDashboardRoute: typeof PortalDashboardRoute
@@ -394,7 +374,6 @@ interface PortalRouteRouteChildren {
 }
 
 const PortalRouteRouteChildren: PortalRouteRouteChildren = {
-  PortalApplicationRoute: PortalApplicationRoute,
   PortalAvailabilityRoute: PortalAvailabilityRoute,
   PortalBookingsRoute: PortalBookingsRoute,
   PortalDashboardRoute: PortalDashboardRoute,

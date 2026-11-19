@@ -98,8 +98,15 @@ function BookingsPage() {
             ))}
           </SelectContent>
         </Select>
-        <Input type="date" value={from} onChange={(e) => setFrom(e.target.value)} aria-label="Staying from" />
-        <Input type="date" value={to} onChange={(e) => setTo(e.target.value)} aria-label="Staying to" />
+        {/* iOS shows an empty date field as a blank box, so label each one inside the field. */}
+        <label className="relative block min-w-0">
+          <span className="pointer-events-none absolute left-4 top-1/2 -translate-y-1/2 text-sm text-muted-foreground">From</span>
+          <Input type="date" className="pl-16" value={from} onChange={(e) => setFrom(e.target.value)} aria-label="Staying from" />
+        </label>
+        <label className="relative block min-w-0">
+          <span className="pointer-events-none absolute left-4 top-1/2 -translate-y-1/2 text-sm text-muted-foreground">To</span>
+          <Input type="date" className="pl-16" value={to} onChange={(e) => setTo(e.target.value)} aria-label="Staying to" />
+        </label>
       </div>
       {q.isLoading ? (
         <LoadingState />

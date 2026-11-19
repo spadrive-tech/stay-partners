@@ -621,3 +621,9 @@ export const submitStayKyc = (v: StayKycInput) =>
   });
 
 export const walletQuery = { queryKey: ["wallet"], queryFn: getStayWallet };
+
+/**
+ * The backend's listing endpoints (details, rooms, policies, availability, images) only accept
+ * draft or rejected listings. Approved, live, pending or suspended listings are read-only for now.
+ */
+export const canEditListing = (status?: string) => status === "draft" || status === "rejected";

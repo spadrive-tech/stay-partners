@@ -121,7 +121,7 @@ function PortalLayout() {
         <SideNav name={name} email={email} onLogout={logout} />
       </aside>
       <Sheet open={open} onOpenChange={setOpen}>
-        <SheetContent side="left" className="w-72 border-0 p-0">
+        <SheetContent side="left" className="w-72 border-0 p-0 [&>button]:hidden">
           <SheetTitle className="sr-only">Navigation</SheetTitle>
           <SideNav name={name} email={email} onNavigate={() => setOpen(false)} onLogout={logout} />
         </SheetContent>
