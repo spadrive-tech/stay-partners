@@ -3,7 +3,8 @@ import { useQuery } from "@tanstack/react-query";
 import { ImageOff, Plus } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { EmptyState, ErrorState, LoadingState, PageHeader, StatusBadge } from "@/components/portal/shared";
-import { api, asList, listingPrice, listingTypeLabel, type Listing } from "@/lib/api";
+import { listingPrice, listingTypeLabel } from "@/lib/api";
+import { listingsQuery, missingSteps } from "@/lib/stay";
 
 export const Route = createFileRoute("/_portal/listings/")({
   head: () => ({
@@ -20,7 +21,7 @@ export const Route = createFileRoute("/_portal/listings/")({
 });
 
 function ListingsPage() {
-  const q = useQuery({ queryKey: ["listings"], queryFn: async () => asList<Listing>(await api("/stays/partner/listings"), "listings") });
+  const q = useQuery(listingsQuery);
   const newBtn = (
     <Button asChild>
       <Link to="/listings/new"><Plus className="h-4 w-4" /> New listing</Link>
@@ -43,20 +44,23 @@ function ListingsPage() {
               <Link key={l.id} to="/listings/$id" params={{ id: String(l.id) }} className="group overflow-hidden rounded-xl border bg-card shadow-card transition hover:-translate-y-0.5">
                 <div className="aspect-[4/3] bg-muted">
                   {cover ? (
-                    <img src={cover} alt={l.title} className="h-full w-full object-cover" loading="lazy" />
+                    <img src={cover} alt={l.title || "Listing photo"} className="h-full w-full object-cover" loading="lazy" />
                   ) : (
                     <div className="flex h-full items-center justify-center text-muted-foreground"><ImageOff className="h-6 w-6" /></div>
                   )}
                 </div>
                 <div className="p-4">
                   <div className="flex items-start justify-between gap-2">
-                    <h3 className="font-semibold leading-snug group-hover:text-primary">{l.title}</h3>
+                    <h3 className="font-semibold leading-snug group-hover:text-primary">{l.title || "Untitled draft"}</h3>
                     <StatusBadge status={l.status} />
                   </div>
                   <p className="mt-1 text-xs text-muted-foreground">
-                     {listingTypeLabel(l.type)} · {l.city ?? "—"} · {l.units} unit{l.units === 1 ? "" : "s"}
+                     {listingTypeLabel(l.type)} · {l.units} unit{l.units === 1 ? "" : "s"}
                   </p>
-                  <p className="mt-3 text-sm"><span className="font-semibold">{listingPrice(l)}</span> <span className="text-muted-foreground">/ {l.type === "yearly_rental" ? "year" : "night"}</span></p>
+                  <p className="mt-3 text-sm"><span className="font-semibold">{listingPrice(l)}</span> <span className="text-muted-foreground">/ night{l.type === "hotel_room" && l.nightly_rate ? " from" : ""}</span></p>
+                  {(l.status === "draft" || l.status === "rejected") && missingSteps(l.progress).length > 0 && (
+                    <p className="mt-2 text-xs text-muted-foreground">To finish: {missingSteps(l.progress).join(", ")}</p>
+                  )}
                 </div>
               </Link>
             );

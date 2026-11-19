@@ -1,30 +1,56 @@
 import { useMemo, useState } from "react";
-import { useQuery } from "@tanstack/react-query";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { toast } from "sonner";
-import { addDays, addMonths, eachDayOfInterval, endOfMonth, endOfWeek, format, isBefore, isSameMonth, startOfDay, startOfMonth, startOfWeek } from "date-fns";
+import { addDays, addMonths, eachDayOfInterval, endOfMonth, endOfWeek, format, isBefore, isSameMonth, parseISO, startOfDay, startOfMonth, startOfWeek } from "date-fns";
 import { ChevronLeft, ChevronRight, Loader2 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { ErrorState, LoadingState } from "@/components/portal/shared";
-import { api, asList, type AvailabilityDay, type DayState } from "@/lib/api";
+import type { AvailabilityEntry, DayState } from "@/lib/api";
+import { listingQuery, saveAvailability } from "@/lib/stay";
 import { cn } from "@/lib/utils";
 
 const key = (d: Date) => format(d, "yyyy-MM-dd");
+/** How far ahead a saved calendar covers when nothing is marked further out. */
+const HORIZON_DAYS = 365;
+
+type EntryStatus = AvailabilityEntry["availability_status"];
+
+/** Expand the backend's date ranges (inclusive) into a per-day map. */
+function expand(entries: AvailabilityEntry[]): Record<string, EntryStatus> {
+  const out: Record<string, EntryStatus> = {};
+  for (const e of entries) {
+    if (e.room_type_id) continue; // whole-listing calendar only
+    const a = parseISO(e.start_date), b = parseISO(e.end_date);
+    if (isBefore(b, a)) continue;
+    for (const d of eachDayOfInterval({ start: a, end: b })) out[key(d)] = e.availability_status;
+  }
+  return out;
+}
+
+/** Collapse consecutive days with the same status into ranges. */
+function compress(days: { date: string; status: EntryStatus }[]): AvailabilityEntry[] {
+  const out: AvailabilityEntry[] = [];
+  for (const d of days) {
+    const last = out[out.length - 1];
+    if (last && last.availability_status === d.status && key(addDays(parseISO(last.end_date), 1)) === d.date) last.end_date = d.date;
+    else out.push({ start_date: d.date, end_date: d.date, availability_status: d.status, source: d.status === "externally_booked" ? "external_booking" : "partner" });
+  }
+  return out;
+}
 
 export function AvailabilityCalendar({ listingId }: { listingId: string }) {
+  const qc = useQueryClient();
   const [month, setMonth] = useState(() => startOfMonth(new Date()));
   const [edits, setEdits] = useState<Record<string, DayState>>({});
   const [saving, setSaving] = useState(false);
-  const from = key(startOfMonth(month));
-  const to = key(endOfMonth(addMonths(month, 1)));
-  const q = useQuery({
-    queryKey: ["availability", listingId, from],
-    queryFn: async () => asList<AvailabilityDay>(await api(`/stays/partner/listings/${listingId}/availability?from=${from}&to=${to}`), "days"),
-  });
-  const server = useMemo(() => Object.fromEntries((q.data ?? []).map((d) => [d.date.slice(0, 10), d.status])), [q.data]);
-  const statusOf = (k: string): DayState => edits[k] ?? (server[k] as DayState) ?? "available";
+  const q = useQuery(listingQuery(listingId));
+  const entries = q.data?.availability_entries ?? [];
+  const server = useMemo(() => expand(entries), [entries]);
+  const statusOf = (k: string): DayState => edits[k] ?? (server[k] && server[k] !== "available" ? "blocked" : "available");
   const today = startOfDay(new Date());
+  const neverSaved = q.data ? !q.data.progress?.availability_completed && entries.length === 0 : false;
 
   function toggle(d: Date) {
     const k = key(d);
@@ -55,15 +81,29 @@ export function AvailabilityCalendar({ listingId }: { listingId: string }) {
   }
 
   async function save() {
+    // Send the whole calendar from today to the horizon as non-overlapping ranges,
+    // keeping past entries and dates booked outside Kiataka as they are.
+    const todayKey = key(today);
+    const marked = [...Object.keys(server), ...Object.keys(edits)].filter((k) => k >= todayKey).sort();
+    const minEnd = addDays(today, HORIZON_DAYS);
+    const lastMarked = marked.length ? parseISO(marked[marked.length - 1]!) : minEnd;
+    const end = isBefore(lastMarked, minEnd) ? minEnd : lastMarked;
+    const days = eachDayOfInterval({ start: today, end }).map((d) => {
+      const k = key(d);
+      const edited = edits[k];
+      const status: EntryStatus = edited ? (edited === "available" ? "available" : "blocked") : server[k] ?? "available";
+      return { date: k, status };
+    });
+    const past = entries.filter((e) => !e.room_type_id && e.end_date < todayKey).map(({ id: _id, ...e }) => e);
+    const roomLevel = entries.filter((e) => e.room_type_id);
     setSaving(true);
     try {
-      await api(`/stays/partner/listings/${listingId}/availability`, {
-        method: "PUT",
-        body: { days: Object.entries(edits).map(([date, status]) => ({ date, status })) },
-      });
-      toast.success("Availability updated");
+      await saveAvailability(listingId, [...past, ...roomLevel, ...compress(days)]);
+      toast.success("Availability saved");
       setEdits({});
-      q.refetch();
+      await q.refetch();
+      qc.invalidateQueries({ queryKey: ["listings"] });
+      qc.invalidateQueries({ queryKey: ["onboarding"] });
     } catch (err) {
       toast.error(err instanceof Error ? err.message : "Couldn't save availability");
     } finally {
@@ -88,10 +128,9 @@ export function AvailabilityCalendar({ listingId }: { listingId: string }) {
         <div className="flex items-center gap-4 text-xs text-muted-foreground">
           <Legend className="bg-card border" label="Available" />
           <Legend className="bg-muted-foreground/30" label="Occupied" />
-          <Legend className="bg-primary" label="Booked on Kiataka" />
         </div>
-        <Button onClick={save} disabled={!Object.keys(edits).length || saving}>
-          {saving && <Loader2 className="h-4 w-4 animate-spin" />} Save changes{Object.keys(edits).length ? ` (${Object.keys(edits).length})` : ""}
+        <Button onClick={save} disabled={(!Object.keys(edits).length && !neverSaved) || saving}>
+          {saving && <Loader2 className="h-4 w-4 animate-spin" />} {neverSaved && !Object.keys(edits).length ? "Save availability" : `Save changes${Object.keys(edits).length ? ` (${Object.keys(edits).length})` : ""}`}
         </Button>
       </div>
       <div className="mt-5 rounded-xl border bg-muted/40 p-4">
@@ -103,6 +142,7 @@ export function AvailabilityCalendar({ listingId }: { listingId: string }) {
           <Button type="button" variant="outline" onClick={() => applyRange("available")}>Mark available</Button>
         </div>
         <p className="mt-2 text-xs text-muted-foreground">Use this for stays already booked outside Kiataka, even months or years ahead. You can also tap single dates below.</p>
+        {neverSaved && <p className="mt-2 text-xs font-medium text-foreground">Everything is open by default. Mark any dates that are taken, then save — Kiataka needs your availability before you can submit.</p>}
       </div>
       <div className="mt-6 grid gap-8 lg:grid-cols-2">
         {[month, addMonths(month, 1)].map((m) => (

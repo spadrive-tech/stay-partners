@@ -316,6 +316,86 @@ export interface PayoutAccount {
   account_number: string;
   account_name: string;
 }
+/** A bank from GET /payment/banks (Embedly). */
+export interface BankOption {
+  bankname: string;
+  bankcode: string;
+}
+
+/** The partner's saved payout account (GET /stay/partners/bank-account). */
+export interface StayBankAccount {
+  id: number;
+  bank_code: string;
+  bank_name: string;
+  account_number_masked: string;
+  account_name: string;
+  verification_status: "verified" | "pending" | "failed" | string;
+  is_active?: boolean;
+  verified_at?: string | null;
+  created_at?: string | null;
+  updated_at?: string | null;
+}
+
+export interface BankAccountInput {
+  bank_code: string;
+  bank_name: string;
+  account_number: string;
+}
+
+function pickAccount(res: unknown): StayBankAccount | null {
+  if (res && typeof res === "object" && "account" in res) {
+    const a = (res as { account: unknown }).account;
+    return a && typeof a === "object" ? (a as StayBankAccount) : null;
+  }
+  return null;
+}
+
+export async function getBanks(): Promise<BankOption[]> {
+  const res = await api("/stay/partners/banks");
+  // Accept { data: [...] }, { banks: [...] }, { items: [...] } or a bare list,
+  // with either bankname/bankcode or name/code fields.
+  return asList<Record<string, unknown>>(res, "banks")
+    .map((b) => ({
+      bankname: String(b["bankname"] ?? b["bank_name"] ?? b["name"] ?? ""),
+      bankcode: String(b["bankcode"] ?? b["bank_code"] ?? b["code"] ?? ""),
+    }))
+    .filter((b) => b.bankname && b.bankcode)
+    .sort((a, b) => a.bankname.localeCompare(b.bankname));
+}
+
+/** Returns null when the partner hasn't saved an account yet. */
+export async function getStayBankAccount(): Promise<StayBankAccount | null> {
+  try {
+    return pickAccount(await api("/stay/partners/bank-account"));
+  } catch (err) {
+    if (err instanceof ApiError && err.status === 404) return null;
+    throw err;
+  }
+}
+
+/** First account: verifies the account name with the bank and saves it. */
+export async function verifyStayBankAccount(input: BankAccountInput): Promise<StayBankAccount | null> {
+  return pickAccount(await api("/stay/partners/bank-account/verify", { body: input }));
+}
+
+/** Changing an existing account. */
+export async function replaceStayBankAccount(input: BankAccountInput): Promise<StayBankAccount | null> {
+  return pickAccount(await api("/stay/partners/bank-account", { method: "PUT", body: input }));
+}
+
+/** GET /stay/partners/onboarding */
+export interface StayOnboarding {
+  business_name?: string | null;
+  onboarding: {
+    completed: boolean;
+    current_phase?: string | null;
+    bank_account_verified?: boolean;
+    has_listing?: boolean;
+    draft_listing_count?: number;
+    submitted_listing_count?: number;
+  };
+}
+
 export interface Partner {
   business_type?: "hotel" | "shortlet_operator" | "individual_host" | "house_agent";
   id?: string;
@@ -334,9 +414,15 @@ export interface Summary {
   units_vacant_today: number;
   upcoming_checkins: number;
   earnings_this_month: number;
+  /** What the partner can withdraw now (wallet.available_earnings). */
   pending_payout_balance: number;
+  /** Earned but not yet withdrawable (wallet.pending_earnings). */
+  pending_earnings?: number;
+  lifetime_earnings?: number;
+  payout_eligible?: boolean;
+  kyc_status?: string;
 }
-export type ListingStatus = "draft" | "pending_review" | "live" | "suspended";
+export type ListingStatus = "draft" | "pending_review" | "approved" | "rejected" | "live" | "suspended";
 export interface Media {
   id: string;
   url: string;
@@ -371,8 +457,30 @@ export interface Listing {
   check_in?: CheckInDetails;
   room_types?: RoomType[];
   apartment_type?: string;
+  /** Stay backend extras */
+  state?: string;
+  rejection_reason?: string;
+  progress?: ListingProgress;
+  availability_entries?: AvailabilityEntry[];
 }
-export interface ExtraFee { name: string; amount: number; charge: "per_stay" | "per_night"; refundable?: boolean }
+export interface ListingProgress {
+  details_completed: boolean;
+  rooms_completed: boolean;
+  policies_completed: boolean;
+  availability_completed: boolean;
+  last_completed_tab?: string | null;
+  next_tab?: string | null;
+}
+export interface AvailabilityEntry {
+  id?: number | null;
+  room_type_id?: number | null;
+  start_date: string;
+  end_date: string;
+  availability_status: "available" | "blocked" | "externally_booked";
+  source?: "partner" | "external_booking" | "system";
+  notes?: string | null;
+}
+export interface ExtraFee { id?: number; name: string; amount: number; charge: "per_stay" | "per_night"; refundable?: boolean; fee_type?: "cleaning" | "caution" | "custom"; mandatory?: boolean }
 export interface RentalDetails {
   availability: "available" | "occupied";
   available_from: string;
@@ -388,17 +496,17 @@ export interface RentalDetails {
   fees: { name: string; amount: number; refundable: boolean }[];
 }
 export const listingTypeLabel = (type: Listing["type"]) => type === "hotel_room" ? "Hotel room" : type === "yearly_rental" ? "Yearly rental" : "Shortlet";
-export const listingPrice = (listing: Listing) => formatNaira(listing.type === "yearly_rental" ? listing.annual_rent : listing.nightly_rate);
+export const listingPrice = (listing: Listing) => (listing.nightly_rate ? formatNaira(listing.nightly_rate) : "—");
 export interface PaymentTerms { full_payment: boolean; deposit: boolean; deposit_percent?: number; pay_on_arrival: boolean }
 export interface CancellationPolicy { allowed: boolean; free_until_days?: number; refund_percent?: number }
 export interface CheckInDetails {
-  method: "front_desk" | "meet_host" | "self_check_in" | "key_collection";
+  method: "front_desk" | "self_check_in" | "meet_and_greet" | "other";
   instructions?: string;
   contact_phone?: string;
   check_in_time?: string;
   check_out_time?: string;
 }
-export interface RoomType { name: string; nightly_rate: number; max_guests: number; units: number }
+export interface RoomType { id?: number; name: string; nightly_rate: number; max_guests: number; units: number }
 export type BookingStatus = "pending" | "confirmed" | "checked_in" | "completed" | "cancelled";
 export interface Booking {
   request_type?: "booking" | "rental_application" | "inspection";

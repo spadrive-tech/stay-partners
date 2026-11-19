@@ -1,5 +1,4 @@
 import { useState } from "react";
-import { toast } from "sonner";
 import { Loader2 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Checkbox } from "@/components/ui/checkbox";
@@ -8,23 +7,26 @@ import { Label } from "@/components/ui/label";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Textarea } from "@/components/ui/textarea";
 import { DescriptionAssistant } from "./DescriptionAssistant";
-import { AMENITIES, APARTMENT_TYPES, type Listing } from "@/lib/api";
+import { AMENITIES, type Listing } from "@/lib/api";
+import type { DetailsInput } from "@/lib/stay";
 
-export type ListingInput = Pick<Listing, "title" | "type" | "description" | "city" | "address" | "nightly_rate" | "units" | "amenities" | "house_rules"> & { apartment_type?: string | undefined; annual_rent?: number | undefined };
+/**
+ * Listing details (PUT /stay/partners/listings/{id}/details).
+ * Prices, units and apartment type are on the Pricing tab, because the
+ * backend stores them on room types.
+ */
+export type ListingInput = DetailsInput & { type: "hotel_room" | "shortlet"; nightly_rate?: number; units?: number };
 
 export function ListingForm({ initial, onSubmit, submitLabel, disabled }: { initial?: Partial<Listing>; onSubmit: (v: ListingInput) => Promise<void>; submitLabel: string; disabled?: boolean }) {
   const [v, setV] = useState<ListingInput>({
     title: initial?.title ?? "",
-    type: initial?.type ?? "shortlet",
+    type: initial?.type === "hotel_room" ? "hotel_room" : "shortlet",
     description: initial?.description ?? "",
     city: initial?.city ?? "",
+    state: initial?.state ?? "",
     address: initial?.address ?? "",
-    nightly_rate: initial?.nightly_rate ?? 0,
-    units: initial?.units ?? 1,
     amenities: initial?.amenities ?? [],
     house_rules: initial?.house_rules ?? "",
-    apartment_type: initial?.apartment_type ?? "",
-    annual_rent: initial?.annual_rent ?? 0,
   });
   const [saving, setSaving] = useState(false);
   const set = <K extends keyof ListingInput>(k: K, val: ListingInput[K]) => setV((p) => ({ ...p, [k]: val }));
@@ -34,13 +36,9 @@ export function ListingForm({ initial, onSubmit, submitLabel, disabled }: { init
       className="grid gap-5 sm:grid-cols-2"
       onSubmit={async (e) => {
         e.preventDefault();
-        if (v.type !== "hotel_room" && !v.apartment_type) {
-          toast.error("Choose the apartment type.");
-          return;
-        }
         setSaving(true);
         try {
-          await onSubmit({ ...v, nightly_rate: v.type === "yearly_rental" ? 0 : v.nightly_rate, annual_rent: v.type === "yearly_rental" ? v.annual_rent : undefined });
+          await onSubmit(v);
         } finally {
           setSaving(false);
         }
@@ -48,61 +46,34 @@ export function ListingForm({ initial, onSubmit, submitLabel, disabled }: { init
     >
       <div className="space-y-2 sm:col-span-2">
         <Label>Title</Label>
-        <Input required value={v.title} onChange={(e) => set("title", e.target.value)} placeholder="e.g. Deluxe 2-bed apartment, Lekki Phase 1" />
+        <Input required maxLength={200} value={v.title} onChange={(e) => set("title", e.target.value)} placeholder="e.g. Deluxe 2-bed apartment, Lekki Phase 1" />
       </div>
-      <div className="space-y-2">
+      <div className="space-y-2 sm:col-span-2">
         <Label>Type</Label>
-        <Select
-          value={v.type}
-          onValueChange={(t) => {
-            const nt = t as ListingInput["type"];
-            setV((p) => ({ ...p, type: nt, apartment_type: nt !== "hotel_room" ? p.apartment_type : "" }));
-          }}
-        >
+        <Select value={v.type} onValueChange={(t) => set("type", t as ListingInput["type"])}>
           <SelectTrigger><SelectValue /></SelectTrigger>
           <SelectContent>
-            <SelectItem value="hotel_room">Hotel room</SelectItem>
+            <SelectItem value="hotel_room">Hotel</SelectItem>
             <SelectItem value="shortlet">Shortlet apartment</SelectItem>
-            <SelectItem value="yearly_rental">Yearly rental apartment</SelectItem>
           </SelectContent>
         </Select>
       </div>
-      {v.type !== "hotel_room" && (
-        <div className="space-y-2">
-          <Label>Apartment type</Label>
-          <Select {...(v.apartment_type ? { value: v.apartment_type } : {})} onValueChange={(t) => set("apartment_type", t)}>
-            <SelectTrigger><SelectValue placeholder="Select apartment type" /></SelectTrigger>
-            <SelectContent>
-              {APARTMENT_TYPES.map((t) => (
-                <SelectItem key={t} value={t}>{t}</SelectItem>
-              ))}
-              {v.apartment_type && !APARTMENT_TYPES.includes(v.apartment_type) && (
-                <SelectItem value={v.apartment_type}>{v.apartment_type}</SelectItem>
-              )}
-            </SelectContent>
-          </Select>
-        </div>
-      )}
       <div className="space-y-2">
         <Label>City</Label>
-        <Input required value={v.city} onChange={(e) => set("city", e.target.value)} placeholder="Lagos" />
+        <Input required maxLength={100} value={v.city} onChange={(e) => set("city", e.target.value)} placeholder="Lagos" />
+      </div>
+      <div className="space-y-2">
+        <Label>State</Label>
+        <Input required maxLength={100} value={v.state ?? ""} onChange={(e) => set("state", e.target.value)} placeholder="Lagos" />
       </div>
       <div className="space-y-2 sm:col-span-2">
         <Label>Address</Label>
-        <Input required value={v.address} onChange={(e) => set("address", e.target.value)} />
-      </div>
-      <div className="space-y-2">
-        <Label htmlFor="listing-price">{v.type === "yearly_rental" ? "Yearly rent (₦)" : "Nightly rate (₦)"}</Label>
-        <Input id="listing-price" required type="number" min={1} step="any" value={(v.type === "yearly_rental" ? v.annual_rent : v.nightly_rate) || ""} onChange={(e) => set(v.type === "yearly_rental" ? "annual_rent" : "nightly_rate", Number(e.target.value))} />
-      </div>
-      <div className="space-y-2">
-        <Label>Number of units</Label>
-        <Input required type="number" min={1} value={v.units} onChange={(e) => set("units", Number(e.target.value))} />
+        <Input required maxLength={500} value={v.address} onChange={(e) => set("address", e.target.value)} />
       </div>
       <div className="space-y-2 sm:col-span-2">
         <Label>Description</Label>
-        <Textarea rows={5} value={v.description} onChange={(e) => set("description", e.target.value)} />
-        {v.type !== "yearly_rental" && <DescriptionAssistant values={{ ...v, type: v.type }} onUse={(t) => set("description", t)} />}
+        <Textarea rows={5} maxLength={5000} value={v.description} onChange={(e) => set("description", e.target.value)} />
+        <DescriptionAssistant values={v} onUse={(t) => set("description", t)} />
       </div>
       <div className="space-y-3 sm:col-span-2">
         <Label>Amenities</Label>
@@ -120,7 +91,7 @@ export function ListingForm({ initial, onSubmit, submitLabel, disabled }: { init
       </div>
       <div className="space-y-2 sm:col-span-2">
         <Label>House rules</Label>
-        <Textarea rows={4} value={v.house_rules} onChange={(e) => set("house_rules", e.target.value)} placeholder="No parties, check-in from 2pm…" />
+        <Textarea rows={4} value={v.house_rules} onChange={(e) => set("house_rules", e.target.value)} placeholder={"One rule per line, e.g.\nNo parties\nNo smoking indoors"} />
       </div>
       <div className="sm:col-span-2">
         <Button type="submit" disabled={saving || disabled}>

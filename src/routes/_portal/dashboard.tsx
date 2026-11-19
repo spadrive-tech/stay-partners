@@ -3,7 +3,8 @@ import { useQuery } from "@tanstack/react-query";
 import { BedDouble, CalendarClock, DoorOpen, Plus, TrendingUp, Wallet } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { ErrorState, LoadingState, PageHeader, StatCard } from "@/components/portal/shared";
-import { api, formatNaira, type Summary } from "@/lib/api";
+import { formatNaira } from "@/lib/api";
+import { summaryQuery } from "@/lib/stay";
 
 export const Route = createFileRoute("/_portal/dashboard")({
   head: () => ({
@@ -20,7 +21,7 @@ export const Route = createFileRoute("/_portal/dashboard")({
 });
 
 function Dashboard() {
-  const q = useQuery({ queryKey: ["summary"], queryFn: () => api<Summary>("/stays/partner/summary") });
+  const q = useQuery(summaryQuery);
   const s = q.data;
   return (
     <>
@@ -45,10 +46,11 @@ function Dashboard() {
           <StatCard label="Earnings this month" value={formatNaira(s?.earnings_this_month)} icon={<TrendingUp className="h-4 w-4" />} />
           <div className="rounded-xl bg-brand-gradient p-5 text-primary-foreground shadow-card sm:col-span-2">
             <div className="flex items-center justify-between">
-              <span className="text-sm opacity-80">Pending payout balance</span>
+              <span className="text-sm opacity-80">Available to withdraw</span>
               <Wallet className="h-5 w-5 opacity-80" />
             </div>
             <div className="mt-4 text-3xl font-semibold">{formatNaira(s?.pending_payout_balance)}</div>
+            {!!s?.pending_earnings && <div className="mt-1 text-sm opacity-80">+ {formatNaira(s.pending_earnings)} pending from recent stays</div>}
             <Button asChild variant="secondary" size="sm" className="mt-4">
               <Link to="/payouts">View payouts</Link>
             </Button>

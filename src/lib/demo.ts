@@ -80,6 +80,138 @@ export async function demoApi(path: string, method: string, body: unknown, form?
     return l;
   };
 
+  if (p === "/stay/partners/banks")
+    return {
+      data: [
+        { bankname: "Access Bank", bankcode: "000014" },
+        { bankname: "First Bank of Nigeria", bankcode: "000016" },
+        { bankname: "Guaranty Trust Bank", bankcode: "000013" },
+        { bankname: "KEYSTONE BANK", bankcode: "000002" },
+        { bankname: "Opay", bankcode: "100004" },
+        { bankname: "United Bank for Africa", bankcode: "000004" },
+        { bankname: "Zenith Bank", bankcode: "000015" },
+      ],
+    };
+  if (p === "/stay/partners/bank-account" || p === "/stay/partners/bank-account/verify") {
+    if (method === "POST" || method === "PUT") {
+      const num = String(b["account_number"] ?? "");
+      if (!/^\d{10}$/.test(num)) throw new DemoError("Account number must be 10 digits");
+      db.partner.payout_account = { bank_name: String(b["bank_name"] ?? ""), account_number: num, account_name: "LEKKI COMFORT SUITES LTD" };
+      (db.partner as Record<string, unknown>)["payout_bank_code"] = b["bank_code"];
+    }
+    const a = db.partner.payout_account;
+    if (!a?.account_number) return { status: "success", account: null };
+    return {
+      status: "success",
+      account: {
+        id: 1,
+        bank_code: String((db.partner as Record<string, unknown>)["payout_bank_code"] ?? "000013"),
+        bank_name: a.bank_name,
+        account_number_masked: `******${a.account_number.slice(-4)}`,
+        account_name: a.account_name,
+        verification_status: "verified",
+        is_active: true,
+      },
+    };
+  }
+  if (p === "/stay/partners/wallet")
+    return { wallet_id: 1, currency: "NGN", kyc_status: "verified", pending_earnings: 120000, available_earnings: db.balance, reserved_payout: 0, total_paid_out: 1250000, lifetime_earnings: 2123000, refund_liability: 0, payout_eligible: db.balance > 0 };
+  if (p === "/stay/partners/bookings") {
+    const items = db.bookings.filter((x) => !x.request_type || x.request_type === "booking").map((x) => ({ id: x.id, reference: x.reference, status: x.status, check_in_date: x.check_in, check_out_date: x.check_out, guest_name: x.guest_name, listing_title: x.listing_title, total_amount: x.amount, room_count: 1 }));
+    return { items, total: items.length, page: 1, size: 100 };
+  }
+  if (p === "/stay/partners/wallet/transactions") {
+    const items = earnings().map((e, i) => ({ id: i + 1, direction: "credit", amount: e.net, created_at: e.date, description: e.listing_title }));
+    return { items, total: items.length, page: 1, size: 100 };
+  }
+  // ---- Stay partner listings (/stay/partners/listings*) ----
+  if (p!.startsWith("/stay/partners/listings")) {
+    const parts = p!.replace("/stay/partners/listings", "").split("/").filter(Boolean);
+    const stayListings = () => db.listings.filter((l) => l.type !== "yearly_rental");
+    if (!parts[0]) {
+      if (method === "POST") {
+        const l = { id: `l${Date.now()}`, title: "", type: "shortlet", city: "", address: "", nightly_rate: 0, units: 0, status: "draft", media: [] } as unknown as Listing;
+        db.listings.unshift(l);
+        return { listing_id: l.id, status: "draft", progress: stayProgress(l) };
+      }
+      const items = stayListings().map((l) => ({
+        id: l.id, title: l.title || null, property_type: l.type === "hotel_room" ? "hotel" : "shortlet", status: l.status === "live" ? "published" : l.status,
+        total_room_inventory: stayRooms(l).reduce((n, r) => n + r.room_count, 0),
+        starting_nightly_rate: stayRooms(l).length ? Math.min(...stayRooms(l).map((r) => r.nightly_rate)) : null,
+        progress: stayProgress(l), rejection_reason: null,
+        cover_url: l.media?.find((m) => m.is_cover)?.url ?? l.media?.find((m) => m.type === "photo")?.url ?? null,
+      }));
+      return { items, total: items.length, page: 1, size: 100 };
+    }
+    const l = findL(parts[0]) as Listing & Record<string, any>;
+    const action = parts[1];
+    if (!action) return stayDto(l);
+    if (action === "details") {
+      l.title = b["title"] ?? l.title;
+      l.type = b["property_type"] === "hotel" || b["property_type"] === "hotel_room" ? "hotel_room" : "shortlet";
+      l.city = b["city"] ?? ""; l["state"] = b["state"] ?? ""; l.address = b["address"] ?? ""; l.description = b["description"] ?? "";
+      l.amenities = b["amenity_codes"] ?? [];
+      l.house_rules = (b["house_rules"] ?? []).join("\n");
+      return stayDto(l);
+    }
+    if (action === "rooms") {
+      const rooms = (b["room_types"] ?? []) as { id?: number; name: string; nightly_rate: number; max_guests: number; room_count: number }[];
+      if (l.type === "hotel_room") {
+        l.room_types = rooms.map((r) => ({ name: r.name, nightly_rate: Number(r.nightly_rate), max_guests: r.max_guests, units: r.room_count }));
+        l.nightly_rate = rooms.length ? Math.min(...rooms.map((r) => Number(r.nightly_rate))) : 0;
+        l.units = rooms.reduce((n, r) => n + r.room_count, 0);
+      } else if (rooms[0]) {
+        l.apartment_type = rooms[0].name; l.nightly_rate = Number(rooms[0].nightly_rate); l.units = rooms[0].room_count;
+      }
+      l.max_guests = b["max_guests_per_booking"] ?? l.max_guests;
+      l.min_nights = b["minimum_nights"] ?? 1;
+      l.extra_fees = (b["fees"] ?? []).map((f: any) => ({ name: f.name, amount: Number(f.amount), charge: "per_stay", fee_type: f.fee_type, mandatory: f.is_mandatory }));
+      l["_rooms_done"] = true;
+      return stayDto(l);
+    }
+    if (action === "policies") return (l["_policy"] = b), stayDto(l);
+    if (action === "availability") return (l["_availability"] = (b["entries"] ?? []).map((e: any, i: number) => ({ ...e, id: i + 1 }))), stayDto(l);
+    if (action === "submit") {
+      const missing = Object.entries(stayProgress(l)).filter(([k, v]) => k.endsWith("_completed") && !v).map(([k]) => k.replace("_completed", ""));
+      if (missing.length) throw new DemoError(`Complete these sections first: ${missing.join(", ")}`);
+      l.status = "pending_review";
+      return stayDto(l);
+    }
+    if (action === "images") {
+      l.media ??= [];
+      const imageId = parts[2];
+      if (imageId && method === "DELETE") l.media = l.media.filter((m) => m.id !== imageId);
+      else if (imageId && method === "PATCH") {
+        if (b["is_primary"]) l.media.forEach((m) => (m.is_cover = m.id === imageId));
+        if (typeof b["sort_order"] === "number") {
+          const m = l.media.find((x) => x.id === imageId);
+          if (m) m.position = b["sort_order"];
+          l.media.sort((x, y) => (x.position ?? 0) - (y.position ?? 0));
+        }
+      } else if (method === "POST" && form) {
+        const first = form.get("set_first_as_primary") === "true";
+        const files = form.getAll("files").filter((f): f is File => f instanceof File);
+        files.forEach((f, i) => l.media!.push({ id: `m${Date.now()}${i}`, url: URL.createObjectURL(f), type: "photo", is_cover: first && i === 0, position: l.media!.length }));
+      }
+      return stayImages(l);
+    }
+  }
+  if (p === "/stay/partners/onboarding") {
+    const drafts = db.listings.filter((l) => l.status === "draft").length;
+    const submitted = db.listings.length - drafts;
+    const bank = !!db.partner.payout_account?.account_number;
+    return {
+      business_name: db.partner.business_name,
+      onboarding: {
+        completed: bank && submitted > 0,
+        current_phase: !bank ? "bank_account" : db.listings.length === 0 ? "listing" : submitted === 0 ? "submit_listing" : "completed",
+        bank_account_verified: bank,
+        has_listing: db.listings.length > 0,
+        draft_listing_count: drafts,
+        submitted_listing_count: submitted,
+      },
+    };
+  }
   if (seg[0] === "application") {
     const { id_number, id_type, ...rest } = b;
     Object.assign(db.partner, rest, { profile_complete: true });
@@ -194,4 +326,45 @@ export async function demoApi(path: string, method: string, body: unknown, form?
     }
   }
   return { ok: true };
+}
+
+// ---- Stay listing demo helpers ----
+function stayRooms(l: Listing) {
+  if (l.type === "hotel_room") return (l.room_types ?? []).map((r, i) => ({ id: i + 1, name: r.name, nightly_rate: r.nightly_rate, max_guests: r.max_guests, room_count: r.units }));
+  return l.nightly_rate > 0 ? [{ id: 1, name: l.apartment_type ?? "Entire apartment", nightly_rate: l.nightly_rate, max_guests: l.max_guests ?? 2, room_count: l.units || 1 }] : [];
+}
+function stayImages(l: Listing) {
+  return (l.media ?? []).filter((m) => m.type === "photo").map((m, i) => ({ id: m.id, url: m.url, is_primary: !!m.is_cover, sort_order: m.position ?? i }));
+}
+function stayProgress(l: Listing & Record<string, any>) {
+  const seeded = l.status !== "draft" || !String(l.id).match(/^l\d{6,}/);
+  return {
+    details_completed: !!(l.title && l.city && l.address),
+    rooms_completed: stayRooms(l).length > 0,
+    policies_completed: seeded || !!l["_policy"],
+    availability_completed: seeded || !!l["_availability"],
+    last_completed_tab: null,
+    next_tab: null,
+  };
+}
+function stayDto(l: Listing & Record<string, any>) {
+  const pay = l.payment_terms, cancel = l.cancellation, ci = l.check_in;
+  const policy = l["_policy"] ?? (pay || cancel || ci
+    ? {
+        allow_full_payment: pay?.full_payment ?? true, allow_deposit: pay?.deposit ?? false, allow_pay_on_arrival: pay?.pay_on_arrival ?? false,
+        deposit_percent: pay?.deposit_percent ?? null, cancellation_allowed: cancel?.allowed ?? true, free_cancellation_days: cancel?.free_until_days ?? 2,
+        refund_percentage: cancel?.refund_percent ?? 100, check_in_method: "front_desk", arrival_contact_phone: ci?.contact_phone ?? null,
+        check_in_time: ci?.check_in_time ?? "14:00", check_out_time: ci?.check_out_time ?? "12:00", arrival_instructions: ci?.instructions ?? null,
+      }
+    : null);
+  return {
+    listing_id: l.id, status: l.status === "live" ? "published" : l.status, title: l.title || null,
+    property_type: l.type === "hotel_room" ? "hotel" : "shortlet", city: l.city || null, state: l["state"] || (l.city ? "Lagos" : null), country: "Nigeria",
+    address: l.address || null, description: l.description || null, max_guests_per_booking: l.max_guests ?? null, minimum_nights: l.min_nights ?? 1,
+    amenities: l.amenities ?? [], house_rules: (l.house_rules ?? "").split("\n").map((r: string) => r.trim()).filter(Boolean),
+    room_types: stayRooms(l),
+    fees: (l.extra_fees ?? []).map((f, i) => ({ id: i + 1, fee_type: f.fee_type ?? (f.name.toLowerCase().includes("caution") ? "caution" : f.name.toLowerCase().includes("clean") ? "cleaning" : "custom"), name: f.name, amount: f.amount, is_mandatory: f.mandatory ?? true })),
+    booking_policy: policy, availability: l["_availability"] ?? [], images: stayImages(l), progress: stayProgress(l),
+    rejection_reason: null, submitted_at: null, reviewed_at: null, published_at: null,
+  };
 }

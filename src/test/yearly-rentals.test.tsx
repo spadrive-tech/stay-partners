@@ -4,10 +4,10 @@ import { demoApi } from "@/lib/demo";
 import { listingShareUrl } from "@/components/portal/ShareListing";
 
 describe("Yearly rental agents", () => {
-  it("prices yearly rentals independently of nightly rates", () => {
-    const listing = { type: "yearly_rental", annual_rent: 3500000, nightly_rate: 65000 } as Listing;
-    expect(listingPrice(listing)).toBe("₦3,500,000");
-    expect(listingTypeLabel(listing.type)).toBe("Yearly rental");
+  it("prices Stay listings by their nightly rate (yearly rentals are hidden for now)", () => {
+    expect(listingPrice({ type: "shortlet", nightly_rate: 65000 } as Listing)).toBe("₦65,000");
+    expect(listingPrice({ type: "shortlet", nightly_rate: 0 } as Listing)).toBe("—");
+    expect(listingTypeLabel("yearly_rental")).toBe("Yearly rental");
   });
   it("keeps agents in the existing partner application flow", async () => {
     const partner = await demoApi("/stays/partner/application", "POST", { business_type: "house_agent" });

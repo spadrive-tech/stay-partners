@@ -4,8 +4,7 @@ import { useState } from "react";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { EmptyState, ErrorState, LoadingState, PageHeader } from "@/components/portal/shared";
 import { AvailabilityCalendar } from "@/components/portal/AvailabilityCalendar";
-import { RentalDetailsForm } from "@/components/portal/RentalDetailsForm";
-import { api, asList, type Listing } from "@/lib/api";
+import { listingsQuery } from "@/lib/stay";
 
 export const Route = createFileRoute("/_portal/availability")({
   head: () => ({
@@ -22,14 +21,13 @@ export const Route = createFileRoute("/_portal/availability")({
 });
 
 function AvailabilityPage() {
-  const q = useQuery({ queryKey: ["listings"], queryFn: async () => asList<Listing>(await api("/stays/partner/listings"), "listings") });
+  const q = useQuery(listingsQuery);
   const [picked, setPicked] = useState<string>();
 
   if (q.isLoading) return <LoadingState />;
   if (q.error) return <ErrorState error={q.error} onRetry={() => q.refetch()} />;
   const listings = q.data ?? [];
   const id = picked ?? listings[0]?.id;
-  const listing = listings.find((l) => l.id === id);
 
   return (
     <>
@@ -42,11 +40,11 @@ function AvailabilityPage() {
             <Select value={id} onValueChange={setPicked}>
               <SelectTrigger><SelectValue /></SelectTrigger>
               <SelectContent>
-                {listings.map((l) => <SelectItem key={l.id} value={l.id}>{l.title}</SelectItem>)}
+                {listings.map((l) => <SelectItem key={l.id} value={l.id}>{l.title || "Untitled draft"}</SelectItem>)}
               </SelectContent>
             </Select>
           </div>
-          {listing?.type === "yearly_rental" ? <RentalDetailsForm key={id} listing={listing} availabilityOnly onSaved={() => { q.refetch(); }} /> : <AvailabilityCalendar key={id} listingId={id} />}
+          <AvailabilityCalendar key={id} listingId={id} />
         </div>
       )}
     </>

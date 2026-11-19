@@ -7,8 +7,9 @@ import { Button } from "@/components/ui/button";
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { EmptyState, ErrorState, LoadingState, PageHeader, StatusBadge } from "@/components/portal/shared";
-import { api, asList, formatDate, formatNaira, type Earning, type Payout, type Summary } from "@/lib/api";
-import { meQuery } from "@/lib/queries";
+import { api, asList, formatDate, formatNaira, type Earning, type Payout } from "@/lib/api";
+import { bankAccountQuery } from "@/lib/queries";
+import { summaryQuery } from "@/lib/stay";
 
 export const Route = createFileRoute("/_portal/payouts")({
   head: () => ({
@@ -25,14 +26,14 @@ export const Route = createFileRoute("/_portal/payouts")({
 });
 
 function PayoutsPage() {
-  const summary = useQuery({ queryKey: ["summary"], queryFn: () => api<Summary>("/stays/partner/summary") });
-  const me = useQuery(meQuery);
+  const summary = useQuery(summaryQuery);
+  const bankAccount = useQuery(bankAccountQuery);
   const earnings = useQuery({ queryKey: ["earnings"], queryFn: async () => asList<Earning>(await api("/stays/partner/earnings"), "earnings") });
   const payouts = useQuery({ queryKey: ["payouts"], queryFn: async () => asList<Payout>(await api("/stays/partner/payouts"), "payouts") });
   const [open, setOpen] = useState(false);
   const [sending, setSending] = useState(false);
   const balance = summary.data?.pending_payout_balance ?? 0;
-  const acct = me.data?.payout_account;
+  const acct = bankAccount.data;
 
   async function request() {
     setSending(true);
@@ -104,17 +105,17 @@ function PayoutsPage() {
             <DialogTitle>Request payout of {formatNaira(balance)}</DialogTitle>
             <DialogDescription>We'll send it to the bank account on file.</DialogDescription>
           </DialogHeader>
-          {acct?.account_number ? (
+          {acct?.account_number_masked ? (
             <div className="flex items-center gap-3 rounded-lg border bg-muted p-4">
               <Landmark className="h-5 w-5 text-primary" />
-              <div className="text-sm"><div className="font-medium">{acct.account_name}</div><div className="text-muted-foreground">{acct.bank_name} · {acct.account_number}</div></div>
+              <div className="text-sm"><div className="font-medium">{acct.account_name}</div><div className="text-muted-foreground">{acct.bank_name} · {acct.account_number_masked}</div></div>
             </div>
           ) : (
             <p className="text-sm">You haven't added a bank account yet. <Link to="/profile" className="font-medium text-primary underline">Add one in Profile</Link>.</p>
           )}
           <DialogFooter>
             <Button variant="outline" onClick={() => setOpen(false)}>Cancel</Button>
-            <Button onClick={request} disabled={sending || !acct?.account_number}>{sending && <Loader2 className="h-4 w-4 animate-spin" />} Confirm request</Button>
+            <Button onClick={request} disabled={sending || !acct?.account_number_masked}>{sending && <Loader2 className="h-4 w-4 animate-spin" />} Confirm request</Button>
           </DialogFooter>
         </DialogContent>
       </Dialog>

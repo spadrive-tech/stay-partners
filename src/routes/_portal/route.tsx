@@ -1,12 +1,12 @@
-import { createFileRoute, Link, Outlet, redirect, useNavigate } from "@tanstack/react-router";
+import { createFileRoute, Link, Outlet, redirect, useNavigate, useRouterState } from "@tanstack/react-router";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
-import { useState, useSyncExternalStore } from "react";
+import { useEffect, useState, useSyncExternalStore } from "react";
 import { BedDouble, CalendarCheck, CalendarDays, LayoutDashboard, LogOut, Menu, User, Wallet } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Sheet, SheetContent, SheetTitle } from "@/components/ui/sheet";
-import { Logo } from "@/components/portal/shared";
+import { LoadingState, Logo } from "@/components/portal/shared";
 import { logout as endSession, session } from "@/lib/api";
-import { meQuery } from "@/lib/queries";
+import { onboardingQuery } from "@/lib/queries";
 
 export const Route = createFileRoute("/_portal")({
   ssr: false,
@@ -24,6 +24,9 @@ const NAV = [
   { to: "/payouts", label: "Payouts", icon: Wallet },
   { to: "/profile", label: "Profile", icon: User },
 ] as const;
+
+/** Pages a partner can use before onboarding is complete; everything else sends them to /onboarding. */
+const ONBOARDING_ALLOWED = ["/onboarding", "/listings", "/profile"];
 
 
 
@@ -56,8 +59,17 @@ function PortalLayout() {
   const navigate = useNavigate();
   const qc = useQueryClient();
   const cached = useSyncExternalStore(session.subscribe, session.getPartner, () => null);
-  const me = useQuery(meQuery);
-  const name = me.data?.business_name ?? cached?.business_name ?? "Partner";
+  const onboarding = useQuery(onboardingQuery);
+  const name = onboarding.data?.business_name ?? cached?.business_name ?? "Partner";
+  const pathname = useRouterState({ select: (s) => s.location.pathname });
+  const allowed = ONBOARDING_ALLOWED.some((p) => pathname === p || pathname.startsWith(`${p}/`));
+  // If the status can't be loaded, don't lock the partner out; the pages show their own errors.
+  const mustOnboard = !allowed && onboarding.data?.onboarding.completed === false;
+  const checking = !allowed && onboarding.isLoading;
+
+  useEffect(() => {
+    if (mustOnboard) navigate({ to: "/onboarding", replace: true });
+  }, [mustOnboard, navigate]);
 
   async function logout() {
     await qc.cancelQueries();
@@ -90,7 +102,7 @@ function PortalLayout() {
         </Button>
       </header>
       <main className="mx-auto max-w-6xl px-4 py-8 sm:px-8 sm:py-10">
-        <Outlet />
+        {checking || mustOnboard ? <LoadingState /> : <Outlet />}
       </main>
     </div>
   );

@@ -9,7 +9,8 @@ import { Label } from "@/components/ui/label";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Switch } from "@/components/ui/switch";
 import { Textarea } from "@/components/ui/textarea";
-import { api, formatNaira, HOTEL_ROOM_TYPES, type CancellationPolicy, type CheckInDetails, type ExtraFee, type Listing, type PaymentTerms, type RoomType } from "@/lib/api";
+import { APARTMENT_TYPES, formatNaira, HOTEL_ROOM_TYPES, type CancellationPolicy, type CheckInDetails, type ExtraFee, type Listing, type PaymentTerms, type RoomType } from "@/lib/api";
+import { savePolicies, saveRooms } from "@/lib/stay";
 
 function Section({ title, hint, children }: { title: string; hint?: string; children: ReactNode }) {
   return (
@@ -33,6 +34,9 @@ export function PricingRulesForm({ listing, onSaved }: { listing: Listing; onSav
   const [minNights, setMinNights] = useState(Math.max(2, listing.min_nights ?? 2));
   const [fees, setFees] = useState<ExtraFee[]>(listing.extra_fees ?? []);
   const [rooms, setRooms] = useState<RoomType[]>(listing.room_types ?? []);
+  // Shortlets are saved as a single room type: apartment type + nightly rate + number of units.
+  const firstRoom = listing.room_types?.[0];
+  const [apt, setApt] = useState({ name: listing.apartment_type ?? firstRoom?.name ?? "", rate: firstRoom?.nightly_rate ?? 0, units: firstRoom?.units ?? 1 });
   const [pay, setPay] = useState<PaymentTerms>(listing.payment_terms ?? { full_payment: true, deposit: false, deposit_percent: 30, pay_on_arrival: false });
   const [cancel, setCancel] = useState<CancellationPolicy>(listing.cancellation ?? { allowed: true, free_until_days: 2, refund_percent: 100 });
   const [ci, setCi] = useState<CheckInDetails>(listing.check_in ?? { method: "front_desk", check_in_time: "14:00", check_out_time: "12:00" });
@@ -48,6 +52,14 @@ export function PricingRulesForm({ listing, onSaved }: { listing: Listing; onSav
       toast.error("Deposit must be between 1% and 99%.");
       return;
     }
+    if (!isHotel && (!apt.name || apt.rate <= 0 || apt.units < 1)) {
+      toast.error("Choose the apartment type and set the nightly rate and number of units.");
+      return;
+    }
+    if (isHotel && rooms.length === 0) {
+      toast.error("Add at least one room type.");
+      return;
+    }
     if (fees.some((f) => !f.name.trim() || f.amount <= 0)) {
       toast.error("Give every extra fee a name and an amount.");
       return;
@@ -58,19 +70,14 @@ export function PricingRulesForm({ listing, onSaved }: { listing: Listing; onSav
     }
     setSaving(true);
     try {
-      await api(`/stays/partner/listings/${listing.id}`, {
-        method: "PUT",
-        body: {
-          max_guests: maxGuests,
-          min_nights: minNightsOn ? minNights : 1,
-          extra_fees: fees,
-          room_types: isHotel ? rooms : [],
-          payment_terms: { ...pay, deposit_percent: pay.deposit ? pay.deposit_percent : undefined },
-          cancellation: cancel,
-          check_in: ci,
-        },
-      });
+      const roomTypes: RoomType[] = isHotel
+        ? rooms
+        : [{ ...(firstRoom?.id !== undefined ? { id: firstRoom.id } : {}), name: apt.name, nightly_rate: apt.rate, max_guests: maxGuests, units: apt.units }];
+      await saveRooms(listing.id, { room_types: roomTypes, fees, max_guests: maxGuests, min_nights: minNightsOn ? minNights : 1 });
+      await savePolicies(listing.id, pay, cancel, ci);
       qc.invalidateQueries({ queryKey: ["listings"] });
+      qc.invalidateQueries({ queryKey: ["listing", listing.id] });
+      qc.invalidateQueries({ queryKey: ["onboarding"] });
       toast.success("Pricing & rules saved");
       onSaved();
     } catch (err) {
@@ -110,6 +117,27 @@ export function PricingRulesForm({ listing, onSaved }: { listing: Listing; onSav
         </Section>
       )}
 
+      {!isHotel && (
+        <Section title="Price" hint="What guests pay per night, and how many identical apartments you have.">
+          <div className="grid gap-5 sm:grid-cols-3">
+            <div className="space-y-2">
+              <Label>Apartment type</Label>
+              <Select {...(apt.name ? { value: apt.name } : {})} onValueChange={(n) => setApt({ ...apt, name: n })}>
+                <SelectTrigger><SelectValue placeholder="Select apartment type" /></SelectTrigger>
+                <SelectContent>
+                  {APARTMENT_TYPES.map((t) => (
+                    <SelectItem key={t} value={t}>{t}</SelectItem>
+                  ))}
+                  {apt.name && !APARTMENT_TYPES.includes(apt.name) && <SelectItem value={apt.name}>{apt.name}</SelectItem>}
+                </SelectContent>
+              </Select>
+            </div>
+            <div className="space-y-2"><Label htmlFor="apt-rate">Nightly rate (₦)</Label><Input id="apt-rate" type="number" min={1} step="any" value={apt.rate || ""} onChange={(e) => setApt({ ...apt, rate: num(e.target.value) })} required /></div>
+            <div className="space-y-2"><Label htmlFor="apt-units">Number of units</Label><Input id="apt-units" type="number" min={1} value={apt.units} onChange={(e) => setApt({ ...apt, units: num(e.target.value) })} required /></div>
+          </div>
+        </Section>
+      )}
+
       <Section title="Guests & stay length">
         <div className="grid gap-5 sm:grid-cols-2">
           <div className="space-y-2">
@@ -127,27 +155,20 @@ export function PricingRulesForm({ listing, onSaved }: { listing: Listing; onSav
         </div>
       </Section>
 
-      <Section title="Extra fees" hint={`On top of the nightly rate of ${formatNaira(listing.nightly_rate)}. Add cleaning, caution or any fee of your own.`}>
+      <Section title="Extra fees" hint={`On top of the nightly rate${(isHotel ? listing.nightly_rate : apt.rate) ? ` of ${formatNaira(isHotel ? listing.nightly_rate : apt.rate)}` : ""}. Charged once per stay. Add cleaning, caution or any fee of your own.`}>
         {fees.map((f, i) => (
-          <div key={i} className="grid items-end gap-3 rounded-lg border p-3 sm:grid-cols-[2fr_1.3fr_1.3fr_auto_auto]">
+          <div key={i} className="grid items-end gap-3 rounded-lg border p-3 sm:grid-cols-[2fr_1.3fr_auto_auto]">
             <div className="space-y-1"><Label className="text-xs">Fee name</Label><Input value={f.name} placeholder="Cleaning fee" onChange={(e) => setFees(fees.map((x, j) => (j === i ? { ...x, name: e.target.value } : x)))} /></div>
             <div className="space-y-1"><Label className="text-xs">Amount (₦)</Label><Input type="number" min={0} step={500} value={f.amount || ""} onChange={(e) => setFees(fees.map((x, j) => (j === i ? { ...x, amount: num(e.target.value) } : x)))} /></div>
-            <div className="space-y-1">
-              <Label className="text-xs">Charged</Label>
-              <Select value={f.charge} onValueChange={(v) => setFees(fees.map((x, j) => (j === i ? { ...x, charge: v as ExtraFee["charge"] } : x)))}>
-                <SelectTrigger><SelectValue /></SelectTrigger>
-                <SelectContent><SelectItem value="per_stay">Once per stay</SelectItem><SelectItem value="per_night">Per night</SelectItem></SelectContent>
-              </Select>
-            </div>
-            <label className="flex h-10 items-center gap-2 text-sm"><Checkbox checked={!!f.refundable} onCheckedChange={(c) => setFees(fees.map((x, j) => (j === i ? { ...x, refundable: !!c } : x)))} /> Refundable</label>
+            <label className="flex h-10 items-center gap-2 text-sm"><Checkbox checked={f.mandatory ?? true} onCheckedChange={(c) => setFees(fees.map((x, j) => (j === i ? { ...x, mandatory: !!c } : x)))} /> Required</label>
             <Button type="button" variant="ghost" size="icon" aria-label="Remove fee" onClick={() => setFees(fees.filter((_, j) => j !== i))}><Trash2 className="h-4 w-4" /></Button>
           </div>
         ))}
         <div className="flex flex-wrap gap-2">
           {["Cleaning fee", "Caution fee"].filter((n) => !fees.some((f) => f.name === n)).map((n) => (
-            <Button key={n} type="button" variant="outline" size="sm" onClick={() => setFees([...fees, { name: n, amount: 0, charge: "per_stay", refundable: n === "Caution fee" }])}><Plus className="h-4 w-4" /> {n}</Button>
+            <Button key={n} type="button" variant="outline" size="sm" onClick={() => setFees([...fees, { name: n, amount: 0, charge: "per_stay", fee_type: n === "Caution fee" ? "caution" : "cleaning", mandatory: true }])}><Plus className="h-4 w-4" /> {n}</Button>
           ))}
-          <Button type="button" variant="outline" size="sm" onClick={() => setFees([...fees, { name: "", amount: 0, charge: "per_stay" }])}><Plus className="h-4 w-4" /> Custom fee</Button>
+          <Button type="button" variant="outline" size="sm" onClick={() => setFees([...fees, { name: "", amount: 0, charge: "per_stay", fee_type: "custom", mandatory: true }])}><Plus className="h-4 w-4" /> Custom fee</Button>
         </div>
       </Section>
 
@@ -182,9 +203,9 @@ export function PricingRulesForm({ listing, onSaved }: { listing: Listing; onSav
               <SelectTrigger><SelectValue /></SelectTrigger>
               <SelectContent>
                 <SelectItem value="front_desk">Front desk</SelectItem>
-                <SelectItem value="meet_host">Meet the host</SelectItem>
+                <SelectItem value="meet_and_greet">Meet the host</SelectItem>
                 <SelectItem value="self_check_in">Self check-in (code / smart lock)</SelectItem>
-                <SelectItem value="key_collection">Collect the key</SelectItem>
+                <SelectItem value="other">Other (e.g. collect the key)</SelectItem>
               </SelectContent>
             </Select>
           </div>

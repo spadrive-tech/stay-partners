@@ -3,20 +3,17 @@ import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { useState } from "react";
 import { toast } from "sonner";
 import { z } from "zod";
-import { AlertTriangle, ArrowLeft, ArrowRight, CheckCircle2, Pause, Send, Trash2 } from "lucide-react";
+import { AlertTriangle, ArrowLeft, ArrowRight, CheckCircle2, Clock, Send } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
-import {
-  AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle, AlertDialogTrigger,
-} from "@/components/ui/alert-dialog";
 import { ErrorState, LoadingState, PageHeader, StatusBadge } from "@/components/portal/shared";
 import { ListingForm } from "@/components/portal/ListingForm";
 import { PricingRulesForm } from "@/components/portal/PricingRulesForm";
 import { MediaManager } from "@/components/portal/MediaManager";
 import { AvailabilityCalendar } from "@/components/portal/AvailabilityCalendar";
 import { ShareListing } from "@/components/portal/ShareListing";
-import { RentalDetailsForm } from "@/components/portal/RentalDetailsForm";
-import { api, listingTypeLabel, SUPPORT_EMAIL, type Listing } from "@/lib/api";
+import { listingTypeLabel, SUPPORT_EMAIL } from "@/lib/api";
+import { listingQuery, missingSteps, saveDetails, submitStayListing } from "@/lib/stay";
 
 export const Route = createFileRoute("/_portal/listings/$id")({
   validateSearch: z.object({ tab: z.enum(["details", "pricing", "media", "availability"]).optional() }),
@@ -25,9 +22,9 @@ export const Route = createFileRoute("/_portal/listings/$id")({
       { property: "og:type", content: "website" },
       { name: "twitter:card", content: "summary_large_image" },
       { title: "Edit listing — Kiataka Stays Partners" },
-      { name: "description", content: "Edit listing details, photos, videos and availability." },
+      { name: "description", content: "Edit listing details, pricing, photos and availability." },
       { property: "og:title", content: "Edit listing — Kiataka Stays Partners" },
-      { property: "og:description", content: "Edit listing details, media and availability." },
+      { property: "og:description", content: "Edit listing details, photos and availability." },
     ],
   }),
   component: ListingDetail,
@@ -38,18 +35,23 @@ function ListingDetail() {
   const { tab } = Route.useSearch();
   const navigate = useNavigate({ from: Route.fullPath });
   const qc = useQueryClient();
-  const q = useQuery({ queryKey: ["listing", id], queryFn: () => api<Listing>(`/stays/partner/listings/${id}`) });
+  const q = useQuery(listingQuery(id));
   const [busy, setBusy] = useState(false);
 
-  async function action(path: string, ok: string) {
+  const invalidateAll = () => {
+    qc.invalidateQueries({ queryKey: ["listing", id] });
+    qc.invalidateQueries({ queryKey: ["listings"] });
+    qc.invalidateQueries({ queryKey: ["onboarding"] });
+  };
+
+  async function submit() {
     setBusy(true);
     try {
-      await api(`/stays/partner/listings/${id}/${path}`, { method: "POST" });
-      toast.success(ok);
-      q.refetch();
-      qc.invalidateQueries({ queryKey: ["listings"] });
+      await submitStayListing(id);
+      toast.success("Sent to Kiataka for review");
+      invalidateAll();
     } catch (err) {
-      toast.error(err instanceof Error ? err.message : "Something went wrong");
+      toast.error(err instanceof Error ? err.message : "Couldn't submit");
     } finally {
       setBusy(false);
     }
@@ -64,6 +66,13 @@ function ListingDetail() {
   if (q.isLoading) return <LoadingState />;
   if (q.error || !q.data) return <ErrorState error={q.error} onRetry={() => q.refetch()} />;
   const l = q.data;
+  const canSubmit = l.status === "draft" || l.status === "rejected";
+  const missing = missingSteps(l.progress);
+  const submitButton = (
+    <Button onClick={submit} disabled={busy || missing.length > 0} title={missing.length ? `Still to complete: ${missing.join(", ")}` : undefined}>
+      <Send className="h-4 w-4" /> {l.status === "rejected" ? "Resubmit for review" : "Submit for review"}
+    </Button>
+  );
 
   return (
     <>
@@ -71,61 +80,42 @@ function ListingDetail() {
         <ArrowLeft className="h-4 w-4" /> All listings
       </Link>
       <PageHeader
-        title={l.title}
-        description={`${listingTypeLabel(l.type)} · ${l.city ?? ""}`}
+        title={l.title || "Untitled draft"}
+        description={[listingTypeLabel(l.type), l.city].filter(Boolean).join(" · ")}
         actions={
           <div className="flex flex-wrap items-center gap-2">
             <StatusBadge status={l.status} />
             <ShareListing listing={l} />
-            {l.status === "draft" && (
-              <Button onClick={() => action("submit", "Sent to Kiataka for review")} disabled={busy}>
-                <Send className="h-4 w-4" /> Submit for review
-              </Button>
-            )}
-            {l.status === "live" && (
-              <Button variant="outline" onClick={() => action("pause", "Listing paused (moved to draft)")} disabled={busy}>
-                <Pause className="h-4 w-4" /> Pause
-              </Button>
-            )}
-            <AlertDialog>
-              <AlertDialogTrigger asChild>
-                <Button variant="ghost" className="text-destructive hover:text-destructive" disabled={busy}>
-                  <Trash2 className="h-4 w-4" /> Request removal
-                </Button>
-              </AlertDialogTrigger>
-              <AlertDialogContent>
-                <AlertDialogHeader>
-                  <AlertDialogTitle>Request removal?</AlertDialogTitle>
-                  <AlertDialogDescription>The Kiataka team will review and remove this listing. Existing confirmed bookings will still be honoured.</AlertDialogDescription>
-                </AlertDialogHeader>
-                <AlertDialogFooter>
-                  <AlertDialogCancel>Cancel</AlertDialogCancel>
-                  <AlertDialogAction onClick={() => action("request-removal", "Removal requested")}>Request removal</AlertDialogAction>
-                </AlertDialogFooter>
-              </AlertDialogContent>
-            </AlertDialog>
+            {canSubmit && submitButton}
           </div>
         }
       />
 
+      {l.status === "rejected" && (
+        <Banner tone="destructive" icon={<AlertTriangle className="h-5 w-5 shrink-0 text-destructive" />} title="Kiataka didn't approve this listing">
+          {l.rejection_reason ? `${l.rejection_reason} ` : ""}Make the changes, then resubmit it for review.
+        </Banner>
+      )}
+      {l.status === "pending_review" && (
+        <Banner tone="muted" icon={<Clock className="h-5 w-5 shrink-0 text-warning" />} title="Under review">
+          Our team is reviewing this listing. We'll email you once it's approved — usually within 2 business days.
+        </Banner>
+      )}
       {l.status === "suspended" && (
-        <div className="mb-6 flex gap-3 rounded-xl border border-destructive/30 bg-destructive/5 p-4 text-sm">
-          <AlertTriangle className="h-5 w-5 shrink-0 text-destructive" />
-          <div>
-            <p className="font-semibold text-destructive">This listing has been suspended by Kiataka</p>
-            <p className="mt-1 text-muted-foreground">
-              {l.suspension_reason ? `${l.suspension_reason} ` : ""}Guests can't book it right now. Contact{" "}
-              <a href={`mailto:${SUPPORT_EMAIL}`} className="font-medium text-primary underline">{SUPPORT_EMAIL}</a> to resolve this.
-            </p>
-          </div>
-        </div>
+        <Banner tone="destructive" icon={<AlertTriangle className="h-5 w-5 shrink-0 text-destructive" />} title="This listing has been suspended by Kiataka">
+          {l.suspension_reason ? `${l.suspension_reason} ` : ""}Guests can't book it right now. Contact{" "}
+          <a href={`mailto:${SUPPORT_EMAIL}`} className="font-medium text-primary underline">{SUPPORT_EMAIL}</a> to resolve this.
+        </Banner>
+      )}
+      {canSubmit && missing.length > 0 && (
+        <p className="mb-6 text-sm text-muted-foreground">Before you can submit, complete: <span className="font-medium text-foreground">{missing.join(", ")}</span>.</p>
       )}
 
       <Tabs value={tab ?? "details"} onValueChange={(t) => go(t as Tab)}>
         <TabsList className="flex h-auto flex-wrap justify-start">
           <TabsTrigger value="details">Details</TabsTrigger>
-          <TabsTrigger value="pricing">{l.type === "yearly_rental" ? "Rental terms" : "Pricing & rules"}</TabsTrigger>
-          <TabsTrigger value="media">Photos & videos</TabsTrigger>
+          <TabsTrigger value="pricing">Pricing & rules</TabsTrigger>
+          <TabsTrigger value="media">Photos</TabsTrigger>
           <TabsTrigger value="availability">Availability</TabsTrigger>
         </TabsList>
         <div className="mt-6 rounded-2xl border bg-card p-6 shadow-card sm:p-8">
@@ -136,11 +126,10 @@ function ListingDetail() {
               submitLabel="Save & continue"
               onSubmit={async (v) => {
                 try {
-                  await api(`/stays/partner/listings/${id}`, { method: "PUT", body: v });
+                  await saveDetails(id, v);
                   toast.success("Listing saved");
-                  q.refetch();
+                  invalidateAll();
                   go("pricing");
-                  qc.invalidateQueries({ queryKey: ["listings"] });
                 } catch (err) {
                   toast.error(err instanceof Error ? err.message : "Couldn't save");
                 }
@@ -148,22 +137,22 @@ function ListingDetail() {
             />
           </TabsContent>
           <TabsContent value="pricing" className="mt-0">
-            {l.type === "yearly_rental" ? <RentalDetailsForm listing={l} key={l.id} onSaved={() => { q.refetch(); go("media"); }} /> : <PricingRulesForm
-              key={l.id}
-              listing={l}
-              onSaved={() => { q.refetch(); go("media"); }}
-            />}
+            <PricingRulesForm key={`${l.id}-${l.type}`} listing={l} onSaved={() => { invalidateAll(); go("media"); }} />
           </TabsContent>
           <TabsContent value="media" className="mt-0">
-            <MediaManager listingId={id} media={l.media ?? []} roomTypes={l.type === "hotel_room" ? (l.room_types ?? []).map((r) => r.name).filter(Boolean) : undefined} />
+            <MediaManager listingId={id} media={l.media ?? []} />
             <Next to="availability" label="Continue to availability" />
           </TabsContent>
           <TabsContent value="availability" className="mt-0">
-            {l.type === "yearly_rental" ? <RentalDetailsForm key={l.id} listing={l} availabilityOnly onSaved={() => { q.refetch(); }} /> : <AvailabilityCalendar listingId={id} />}
+            <AvailabilityCalendar listingId={id} />
             <div className="mt-8 flex flex-wrap items-center justify-end gap-3 border-t pt-6">
-              {l.status === "draft" && <span className="text-sm text-muted-foreground">All set? Send it to Kiataka for review.</span>}
-              {l.status === "draft" ? (
-                <Button onClick={() => action("submit", "Sent to Kiataka for review")} disabled={busy}><Send className="h-4 w-4" /> Submit for review</Button>
+              {canSubmit ? (
+                <>
+                  <span className="text-sm text-muted-foreground">
+                    {missing.length ? `Still to complete: ${missing.join(", ")}` : "All set? Send it to Kiataka for review."}
+                  </span>
+                  {submitButton}
+                </>
               ) : (
                 <Button asChild><Link to="/listings"><CheckCircle2 className="h-4 w-4" /> Done</Link></Button>
               )}
@@ -172,5 +161,17 @@ function ListingDetail() {
         </div>
       </Tabs>
     </>
+  );
+}
+
+function Banner({ tone, icon, title, children }: { tone: "destructive" | "muted"; icon: React.ReactNode; title: string; children: React.ReactNode }) {
+  return (
+    <div className={tone === "destructive" ? "mb-6 flex gap-3 rounded-xl border border-destructive/30 bg-destructive/5 p-4 text-sm" : "mb-6 flex gap-3 rounded-xl border bg-muted/40 p-4 text-sm"}>
+      {icon}
+      <div>
+        <p className={tone === "destructive" ? "font-semibold text-destructive" : "font-semibold"}>{title}</p>
+        <p className="mt-1 text-muted-foreground">{children}</p>
+      </div>
+    </div>
   );
 }
